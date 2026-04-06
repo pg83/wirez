@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"errors"
@@ -288,24 +287,6 @@ func (c *socksUDPConn) Close() error {
 	err := c.Conn.Close()
 
 	return errors.Join(err, c.tcpConn.Close())
-}
-
-// TODO performance metrics
-// TODO add/remove dynamic connectors
-
-func NewRotationConnector(connectors []Connector) Connector {
-	return &rotationConnector{connectors: connectors}
-}
-
-type rotationConnector struct {
-	connectors []Connector
-	robin      uint32
-}
-
-func (c *rotationConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	i := int(atomic.AddUint32(&c.robin, 1) % uint32(len(c.connectors)))
-
-	return c.connectors[i].DialContext(ctx, network, address)
 }
 
 type localForwardingConnector struct {

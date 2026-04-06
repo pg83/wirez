@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"io"
 	"log/slog"
 	"net"
 	"net/url"
@@ -10,23 +8,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-func parseProxyFile(proxyFile io.Reader) []*SocksAddr {
-	var socksAddrs []*SocksAddr
-	bs := bufio.NewScanner(proxyFile)
-
-	for bs.Scan() {
-		rawSocksAddr := strings.Trim(bs.Text(), " ")
-		if rawSocksAddr == "" || rawSocksAddr[0] == '#' {
-			continue
-		}
-		socksAddrs = append(socksAddrs, parseProxyURL(rawSocksAddr))
-	}
-
-	Throw(bs.Err())
-
-	return socksAddrs
-}
 
 func parseProxyURL(proxyURL string) *SocksAddr {
 	proxyURL = strings.Trim(proxyURL, " ")

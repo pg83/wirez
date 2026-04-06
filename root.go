@@ -18,15 +18,10 @@ func Main() {
 	var err error
 
 	switch os.Args[1] {
-	case "server":
-		err = runServer(log, os.Args[2:])
-	case "run":
-		err = runRun(log, os.Args[2:])
 	case "runc":
 		err = runContainer(os.Args[2:])
 	default:
-		printUsage()
-		os.Exit(1)
+		err = runRun(log, os.Args[1:])
 	}
 
 	if err != nil {
@@ -42,10 +37,16 @@ func Main() {
 }
 
 func printUsage() {
-	os.Stderr.WriteString(`Usage: wirez <command> [flags]
+	os.Stderr.WriteString(`Usage: wirez [flags] command
 
-Commands:
-  server    Start SOCKS5 server to load-balance requests
-  run       Proxy application traffic through the socks5 server
+Proxy application traffic through the socks5 server.
+
+Flags:
+  -F address    socks5 proxy address to forward TCP/UDP packets
+  -L mapping    local address mapping [target_host:]port:host:hostport[/proto]
+  -v            log verbose level (repeat for more)
+  -q            suppress all log output
+  -uid int      set uid of container process
+  -gid int      set gid of container process
 `)
 }
