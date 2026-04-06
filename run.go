@@ -17,12 +17,15 @@ import (
 
 func runRun(log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+
 	var forwardProxies stringArrayFlag
 	var localMappings stringArrayFlag
 	var verboseLevel countFlag
+
 	fs.Var(&forwardProxies, "F", "socks5 proxy address to forward TCP/UDP packets")
 	fs.Var(&localMappings, "L", "local address mapping [target_host:]port:host:hostport[/proto]")
 	fs.Var(&verboseLevel, "v", "log verbose level")
+
 	quiet := fs.Bool("q", false, "suppress all log output")
 	uid := fs.Int("uid", os.Geteuid(), "set uid of container process")
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
