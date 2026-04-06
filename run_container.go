@@ -29,7 +29,6 @@ func runContainer(args []string) error {
 
 	return Try(func() {
 		Throw(fs.Parse(args))
-
 		Throw(syscall.Sethostname([]byte(*hostname)))
 
 		childConn := newChildUnixSocketConn(*pipeFd)
@@ -95,11 +94,13 @@ func (c *childUnixSocketConn) Close() error {
 
 func (c *childUnixSocketConn) SendFd(fd int) {
 	rights := unix.UnixRights(fd)
+
 	Throw(unix.Sendmsg(c.socketFd, nil, rights, nil, 0))
 }
 
 func (c *childUnixSocketConn) SendMTU(mtu uint32) {
 	data := Throw2(json.Marshal(&MTUMessage{MTU: mtu}))
+
 	Throw2(c.socketFile.Write(data))
 }
 
@@ -119,8 +120,11 @@ type MTUMessage struct {
 
 func setupIPNetwork() {
 	lo := Throw2(netlink.LinkByName(loDevice))
+
 	Throw(netlink.LinkSetUp(lo))
+
 	tun0, tunAddr := setupIPAddress(tunDevice, tunNetworkAddr)
+
 	Throw(netlink.RouteAdd(&netlink.Route{
 		Gw:        tunAddr.IP,
 		LinkIndex: tun0.Attrs().Index,
@@ -147,7 +151,6 @@ func setupResolvConf() {
 	tmpFile := resolvConfTmpDir + "/resolv.conf"
 
 	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
-
 	// Bind mount over /etc/resolv.conf.
 	Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
 }
