@@ -2,17 +2,37 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
-
-	"github.com/spf13/cobra"
 )
 
 func Main(version string) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	if err := newRootCmd(log, version).Execute(); err != nil {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	var err error
+
+	switch os.Args[1] {
+	case "server":
+		err = runServer(log, os.Args[2:])
+	case "run":
+		err = runRun(log, os.Args[2:])
+	case "runc":
+		err = runContainer(os.Args[2:])
+	case "version", "-version", "--version":
+		fmt.Println(version)
+	default:
+		printUsage()
+		os.Exit(1)
+	}
+
+	if err != nil {
 		var exitError *exec.ExitError
 
 		if errors.As(err, &exitError) {
@@ -24,20 +44,12 @@ func Main(version string) {
 	}
 }
 
-func newRootCmd(log *slog.Logger, version string) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "wirez",
-		Short:         "socks5 proxy rotator",
-		Version:       version,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-	}
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `Usage: wirez <command> [flags]
 
-	cmd.AddCommand(
-		newServerCmd(log).cmd,
-		newRunCmd(log).cmd,
-		newRunContainerCmd().cmd,
-	)
-
-	return cmd
+Commands:
+  server    Start SOCKS5 server to load-balance requests
+  run       Proxy application traffic through the socks5 server
+  version   Print version
+`)
 }

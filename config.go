@@ -9,8 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/spf13/pflag"
 )
 
 func parseProxyFile(proxyFile io.Reader) []*SocksAddr {
@@ -151,22 +149,32 @@ func takeLastPort(input string) (port, rest string) {
 	return
 }
 
-type renamedTypeFlagValue struct {
-	pflag.Value
-	name        string
-	hideDefault bool
+type stringArrayFlag []string
+
+func (f *stringArrayFlag) String() string {
+	return strings.Join(*f, ", ")
 }
 
-func (v *renamedTypeFlagValue) Type() string {
-	return v.name
+func (f *stringArrayFlag) Set(s string) error {
+	*f = append(*f, s)
+
+	return nil
 }
 
-func (v *renamedTypeFlagValue) String() string {
-	if v.hideDefault {
-		return ""
-	}
+type countFlag int
 
-	return v.Value.String()
+func (f *countFlag) String() string {
+	return strconv.Itoa(int(*f))
+}
+
+func (f *countFlag) Set(string) error {
+	*f++
+
+	return nil
+}
+
+func (f *countFlag) IsBoolFlag() bool {
+	return true
 }
 
 func setLogLevel(verboseLevel int) *slog.Logger {
