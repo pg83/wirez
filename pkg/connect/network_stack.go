@@ -84,7 +84,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
 	_, ipNet := throw.Throw3(net.ParseCIDR(assignNet))
 
-	subnet := throw.Throw2(tcpip.NewSubnet(tcpip.Address(ipNet.IP), tcpip.AddressMask(ipNet.Mask)))
+	subnet := throw.Throw2(tcpip.NewSubnet(tcpip.AddrFrom4Slice(ipNet.IP.To4()), tcpip.MaskFromBytes(ipNet.Mask)))
 
 	rt := s.GetRouteTable()
 	rt = append(rt, tcpip.Route{
@@ -123,7 +123,7 @@ func (s *NetworkStack) setTCPHandler() {
 }
 
 func (s *NetworkStack) setUDPHandler() {
-	udpForwarder := udp.NewForwarder(s.Stack, func(r *udp.ForwarderRequest) {
+	udpForwarder := udp.NewForwarder(s.Stack, func(r *udp.ForwarderRequest) bool {
 		var wq waiter.Queue
 		id := r.ID()
 		s.log.Debug().Str("handler", "udp").
@@ -132,15 +132,16 @@ func (s *NetworkStack) setUDPHandler() {
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
 			s.log.Error().Str("handler", "udp").Stringer("error", err).Msg("")
-			return
+			return true
 		}
 		go func() {
 			throw.Try(func() {
-				s.handleUDP(gonet.NewUDPConn(s.Stack, &wq, ep), &id)
+				s.handleUDP(gonet.NewUDPConn(&wq, ep), &id)
 			}).Catch(func(exc *throw.Exception) {
 				s.log.Error().Str("handler", "udp").Err(exc).Msg("")
 			})
 		}()
+		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }

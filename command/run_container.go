@@ -14,7 +14,6 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"golang.org/x/sys/unix"
-	"gvisor.dev/gvisor/pkg/tcpip/link/rawfile"
 	"gvisor.dev/gvisor/pkg/tcpip/link/tun"
 )
 
@@ -44,8 +43,8 @@ func newRunContainerCmd() *runContainerCmd {
 
 				childConn.SendFd(tunFd)
 
-				mtu := throw.Throw2(rawfile.GetMTU(tunDevice))
-				childConn.SendMTU(mtu)
+				link := throw.Throw2(netlink.LinkByName(tunDevice))
+				childConn.SendMTU(uint32(link.Attrs().MTU))
 
 				// wait for starting network stack
 				childConn.ReceiveACK()
