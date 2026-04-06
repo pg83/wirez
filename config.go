@@ -23,6 +23,7 @@ func parseProxyURL(proxyURL string) *SocksAddr {
 	}
 
 	Throw3(net.SplitHostPort(socksURL.Host))
+
 	return &SocksAddr{Address: socksURL.Host, Auth: socksURL.User}
 }
 
@@ -41,6 +42,7 @@ func parseAddressMapper(addressMappings []string) AddressMapper {
 
 	for _, mapping := range addressMappings {
 		network, fromAddress, targetAddress := parseMapping(mapping)
+
 		Throw(m.AddAddressMapping(network, fromAddress, targetAddress))
 	}
 
@@ -127,6 +129,7 @@ func takeLastPort(input string) (port, rest string) {
 	}
 
 	Throw2(strconv.ParseUint(port, 10, 16))
+
 	return
 }
 
