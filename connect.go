@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -64,11 +63,11 @@ type socks5Connector struct {
 }
 
 func (c *socks5Connector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	if network != "tcp" {
-		return nil, fmt.Errorf("network %s is not supported", network)
-	}
-
 	err = Try(func() {
+		if network != "tcp" {
+			ThrowFmt("network %s is not supported", network)
+		}
+
 		dstAddr := Throw2(gosocks5.NewAddr(address))
 
 		conn = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
@@ -121,13 +120,13 @@ type socks5UDPConnector struct {
 }
 
 func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (result net.Conn, err error) {
-	if network != "udp" {
-		return nil, fmt.Errorf("network %s is not supported", network)
-	}
-
 	var socksConn net.Conn
 
 	err = Try(func() {
+		if network != "udp" {
+			ThrowFmt("network %s is not supported", network)
+		}
+
 		dstAddr := Throw2(gosocks5.NewAddr(address))
 
 		dstUDPAddr := Throw2(net.ResolveUDPAddr("udp", address))

@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -136,7 +135,7 @@ func (c *childUnixSocketConn) ReceiveACK() {
 	Throw(json.NewDecoder(c.socketFile).Decode(&msg))
 
 	if !msg.ACK {
-		Throw(errors.New("network stack initialization is not acknowledged"))
+		ThrowFmt("network stack initialization is not acknowledged")
 	}
 }
 
