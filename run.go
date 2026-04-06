@@ -133,6 +133,7 @@ func runRun(log *slog.Logger, args []string) error {
 
 func newUnixSocketPair() (parentFd, childFd int) {
 	fds := Throw2(unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0))
+
 	parentFd = fds[0]
 	childFd = fds[1]
 

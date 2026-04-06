@@ -2,13 +2,12 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 )
 
-func Main(version string) {
+func Main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	if len(os.Args) < 2 {
@@ -25,8 +24,6 @@ func Main(version string) {
 		err = runRun(log, os.Args[2:])
 	case "runc":
 		err = runContainer(os.Args[2:])
-	case "version", "-version", "--version":
-		fmt.Println(version)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -45,11 +42,10 @@ func Main(version string) {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Usage: wirez <command> [flags]
+	os.Stderr.WriteString(`Usage: wirez <command> [flags]
 
 Commands:
   server    Start SOCKS5 server to load-balance requests
   run       Proxy application traffic through the socks5 server
-  version   Print version
 `)
 }
