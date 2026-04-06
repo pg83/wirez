@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/v-byte-cpu/wirez/pkg/connect"
+	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"go.uber.org/multierr"
 	"golang.org/x/sys/unix"
 )
@@ -29,7 +30,7 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 			"wirez run -F 127.0.0.1:1234 -L 53:1.1.1.1:53/udp -- curl example.com"}, "\n"),
 		Short: "Proxy application traffic through the socks5 server",
 		Long:  "Run a command in an unprivileged container that transparently proxies application traffic through the socks5 server",
-		RunE: func(cmd *cobra.Command, args []string) (err error) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if c.opts.ContainerUID < 0 {
 				return errors.New("uid is negative")
 			}
@@ -44,94 +45,73 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 			} else {
 				log = setLogLevel(log, c.opts.VerboseLevel)
 			}
-			log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
-			log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
-			forwardProxies, err := parseProxyURLs(c.opts.ForwardProxies)
-			if err != nil {
-				return
-			}
+			return throw.Try(func() {
+				log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
+				log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
+				forwardProxies := parseProxyURLs(c.opts.ForwardProxies)
+				nat := parseAddressMapper(c.opts.LocalAddressMappings)
 
-			nat, err := parseAddressMapper(c.opts.LocalAddressMappings)
-			if err != nil {
-				return
-			}
+				parentFd, childFd := newUnixSocketPair()
+				defer unix.Close(parentFd)
+				defer unix.Close(childFd)
 
-			parentFd, childFd, err := newUnixSocketPair()
-			if err != nil {
-				return
-			}
-			defer unix.Close(parentFd)
-			defer unix.Close(childFd)
+				privileged := os.Geteuid() == 0
+				proc := exec.Command("/proc/self/exe", append([]string{"runc",
+					"--unix-fd", strconv.Itoa(childFd), fmt.Sprintf("--privileged=%t", privileged),
+					"--uid", strconv.Itoa(c.opts.ContainerUID), "--gid", strconv.Itoa(c.opts.ContainerGID), "--"}, args...)...)
+				proc.Stdin = os.Stdin
+				proc.Stdout = os.Stdout
+				proc.Stderr = os.Stderr
 
-			privileged := os.Geteuid() == 0
-			proc := exec.Command("/proc/self/exe", append([]string{"runc",
-				"--unix-fd", strconv.Itoa(childFd), fmt.Sprintf("--privileged=%t", privileged),
-				"--uid", strconv.Itoa(c.opts.ContainerUID), "--gid", strconv.Itoa(c.opts.ContainerGID), "--"}, args...)...)
-			proc.Stdin = os.Stdin
-			proc.Stdout = os.Stdout
-			proc.Stderr = os.Stderr
-
-			if privileged {
-				proc.SysProcAttr = &syscall.SysProcAttr{
-					Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
+				if privileged {
+					proc.SysProcAttr = &syscall.SysProcAttr{
+						Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
+					}
+				} else {
+					proc.SysProcAttr = &syscall.SysProcAttr{
+						Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
+						Credential: &syscall.Credential{Uid: 0, Gid: uint32(c.opts.ContainerGID)},
+						UidMappings: []syscall.SysProcIDMap{
+							{ContainerID: 0, HostID: os.Geteuid(), Size: 1},
+						},
+						GidMappings: []syscall.SysProcIDMap{
+							{ContainerID: c.opts.ContainerGID, HostID: os.Getegid(), Size: 1},
+						},
+					}
 				}
-			} else {
-				proc.SysProcAttr = &syscall.SysProcAttr{
-					Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
-					Credential: &syscall.Credential{Uid: 0, Gid: uint32(c.opts.ContainerGID)},
-					UidMappings: []syscall.SysProcIDMap{
-						{ContainerID: 0, HostID: os.Geteuid(), Size: 1},
-					},
-					GidMappings: []syscall.SysProcIDMap{
-						{ContainerID: c.opts.ContainerGID, HostID: os.Getegid(), Size: 1},
-					},
+				throw.Throw(proc.Start())
+
+				parentConn := newParentUnixSocketConn(parentFd)
+				tunFd := parentConn.ReceiveFd()
+				log.Debug().Int("fd", tunFd).Msg("got tun device")
+				defer unix.Close(tunFd)
+
+				tunMTU := parentConn.ReceiveMTU()
+				log.Debug().Uint32("mtu", tunMTU).Msg("")
+
+				dconn := connect.NewDirectConnector()
+				socksTCPConn := dconn
+				socksTCPConns := make([]connect.Connector, 0, len(c.opts.ForwardProxies)+1)
+				socksTCPConns = append(socksTCPConns, dconn)
+				for _, proxyAddr := range forwardProxies {
+					socksTCPConn = connect.NewSOCKS5Connector(socksTCPConn, proxyAddr)
+					socksTCPConns = append(socksTCPConns, socksTCPConn)
 				}
-			}
-			if err = proc.Start(); err != nil {
-				return err
-			}
+				socksUDPConn := dconn
+				for i, proxyAddr := range forwardProxies {
+					socksUDPConn = connect.NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
+				}
+				socksTCPConn = connect.NewLocalForwardingConnector(dconn, socksTCPConn, nat)
+				socksUDPConn = connect.NewLocalForwardingConnector(dconn, socksUDPConn, nat)
 
-			parentConn := newParentUnixSocketConn(parentFd)
-			tunFd, err := parentConn.ReceiveFd()
-			if err != nil {
-				return err
-			}
-			log.Debug().Int("fd", tunFd).Msg("got tun device")
-			defer unix.Close(tunFd)
+				stack := throw.Throw2(connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
+					socksTCPConn, socksUDPConn, connect.NewTransporter(log)))
+				defer stack.Close()
 
-			tunMTU, err := parentConn.ReceiveMTU()
-			if err != nil {
-				return err
-			}
-			log.Debug().Uint32("mtu", tunMTU).Msg("")
+				parentConn.SendACK()
 
-			dconn := connect.NewDirectConnector()
-			socksTCPConn := dconn
-			socksTCPConns := make([]connect.Connector, 0, len(c.opts.ForwardProxies)+1)
-			socksTCPConns = append(socksTCPConns, dconn)
-			for _, proxyAddr := range forwardProxies {
-				socksTCPConn = connect.NewSOCKS5Connector(socksTCPConn, proxyAddr)
-				socksTCPConns = append(socksTCPConns, socksTCPConn)
-			}
-			socksUDPConn := dconn
-			for i, proxyAddr := range forwardProxies {
-				socksUDPConn = connect.NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
-			}
-			socksTCPConn = connect.NewLocalForwardingConnector(dconn, socksTCPConn, nat)
-			socksUDPConn = connect.NewLocalForwardingConnector(dconn, socksUDPConn, nat)
-
-			stack, err := connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
-				socksTCPConn, socksUDPConn, connect.NewTransporter(log))
-			if err != nil {
-				return err
-			}
-			defer stack.Close()
-
-			if err = parentConn.SendACK(); err != nil {
-				return err
-			}
-
-			return proc.Wait()
+				throw.Throw(proc.Wait())
+			}).AsError()
 		},
 	}
 
@@ -174,19 +154,17 @@ func (o *runCmdOpts) initCliFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&o.ContainerGID, "gid", os.Getegid(), "set gid of container process")
 }
 
-func newUnixSocketPair() (parentFd, childFd int, err error) {
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		return
-	}
+func newUnixSocketPair() (parentFd, childFd int) {
+	fds := throw.Throw2(unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0))
 	parentFd = fds[0]
 	childFd = fds[1]
 
 	// set clo_exec flag on parent file descriptor
-	_, err = unix.FcntlInt(uintptr(parentFd), unix.F_SETFD, unix.FD_CLOEXEC)
+	_, err := unix.FcntlInt(uintptr(parentFd), unix.F_SETFD, unix.FD_CLOEXEC)
 	if err != nil {
 		err = multierr.Append(err, unix.Close(parentFd))
 		err = multierr.Append(err, unix.Close(childFd))
+		throw.Throw(err)
 	}
 	return
 }
@@ -207,39 +185,33 @@ func (c *parentUnixSocketConn) Close() error {
 	return unix.Close(c.socketFd)
 }
 
-func (c *parentUnixSocketConn) ReceiveFd() (fd int, err error) {
+func (c *parentUnixSocketConn) ReceiveFd() int {
 	// receive socket control message
 	b := make([]byte, unix.CmsgSpace(4))
-	if _, _, _, _, err = unix.Recvmsg(c.socketFd, nil, b, 0); err != nil {
-		return
-	}
+	_, _, _, _, err := unix.Recvmsg(c.socketFd, nil, b, 0)
+	throw.Throw(err)
 
 	// parse socket control message
 	cmsgs, err := unix.ParseSocketControlMessage(b)
 	if err != nil {
-		return 0, fmt.Errorf("parse socket control message: %w", err)
+		throw.ThrowFmt("parse socket control message: %w", err)
 	}
 
-	tunFds, err := unix.ParseUnixRights(&cmsgs[0])
-	if err != nil {
-		return 0, err
-	}
+	tunFds := throw.Throw2(unix.ParseUnixRights(&cmsgs[0]))
 	if len(tunFds) == 0 {
-		return 0, errors.New("tun fds slice is empty")
+		throw.Throw(errors.New("tun fds slice is empty"))
 	}
-	return tunFds[0], nil
+	return tunFds[0]
 }
 
-func (c *parentUnixSocketConn) ReceiveMTU() (mtu uint32, err error) {
+func (c *parentUnixSocketConn) ReceiveMTU() uint32 {
 	var msg MTUMessage
-	if err = json.NewDecoder(c.socketFile).Decode(&msg); err != nil {
-		return
-	}
-	return msg.MTU, nil
+	throw.Throw(json.NewDecoder(c.socketFile).Decode(&msg))
+	return msg.MTU
 }
 
-func (c *parentUnixSocketConn) SendACK() error {
-	return json.NewEncoder(c.socketFile).Encode(&ACKMessage{ACK: true})
+func (c *parentUnixSocketConn) SendACK() {
+	throw.Throw(json.NewEncoder(c.socketFile).Encode(&ACKMessage{ACK: true}))
 }
 
 type ACKMessage struct {

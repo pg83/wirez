@@ -5,7 +5,6 @@ package command
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/vishvananda/netlink"
+	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip/link/rawfile"
 	"gvisor.dev/gvisor/pkg/tcpip/link/tun"
@@ -32,69 +32,51 @@ func newRunContainerCmd() *runContainerCmd {
 		Example: "runc --hostname=wirez --unix-fd=10 bash",
 		Short:   "Internal command to run a new process inside an isolated container",
 		Hidden:  true,
-		RunE: func(cmd *cobra.Command, args []string) (err error) {
-			if err = syscall.Sethostname([]byte(c.opts.Hostname)); err != nil {
-				return
-			}
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return throw.Try(func() {
+				throw.Throw(syscall.Sethostname([]byte(c.opts.Hostname)))
 
-			childConn := newChildUnixSocketConn(c.opts.PipeFd)
-			defer childConn.Close()
+				childConn := newChildUnixSocketConn(c.opts.PipeFd)
+				defer childConn.Close()
 
-			tunFd, err := tun.Open(tunDevice)
-			if err != nil {
-				return err
-			}
-			defer unix.Close(tunFd)
+				tunFd := throw.Throw2(tun.Open(tunDevice))
+				defer unix.Close(tunFd)
 
-			if err = childConn.SendFd(tunFd); err != nil {
-				return
-			}
+				childConn.SendFd(tunFd)
 
-			mtu, err := rawfile.GetMTU(tunDevice)
-			if err != nil {
-				return fmt.Errorf("get mtu: %w", err)
-			}
+				mtu := throw.Throw2(rawfile.GetMTU(tunDevice))
+				childConn.SendMTU(mtu)
 
-			if err = childConn.SendMTU(mtu); err != nil {
-				return
-			}
+				// wait for starting network stack
+				childConn.ReceiveACK()
 
-			// wait for starting network stack
-			if err = childConn.ReceiveACK(); err != nil {
-				return
-			}
+				setupIPNetwork()
+				setupResolvConf()
 
-			if err = setupIPNetwork(); err != nil {
-				return err
-			}
+				proc := exec.Command(args[0], args[1:]...)
+				proc.Stdin = os.Stdin
+				proc.Stdout = os.Stdout
+				proc.Stderr = os.Stderr
 
-			if err = setupResolvConf(); err != nil {
-				return err
-			}
-
-			proc := exec.Command(args[0], args[1:]...)
-			proc.Stdin = os.Stdin
-			proc.Stdout = os.Stdout
-			proc.Stderr = os.Stderr
-
-			if c.opts.Privileged {
-				proc.SysProcAttr = &syscall.SysProcAttr{
-					Credential: &syscall.Credential{Uid: uint32(c.opts.ContainerUID), Gid: uint32(c.opts.ContainerGID)},
+				if c.opts.Privileged {
+					proc.SysProcAttr = &syscall.SysProcAttr{
+						Credential: &syscall.Credential{Uid: uint32(c.opts.ContainerUID), Gid: uint32(c.opts.ContainerGID)},
+					}
+				} else if c.opts.ContainerUID != 0 {
+					proc.SysProcAttr = &syscall.SysProcAttr{
+						Cloneflags: syscall.CLONE_NEWUSER,
+						Credential: &syscall.Credential{Uid: uint32(c.opts.ContainerUID), Gid: uint32(c.opts.ContainerGID)},
+						UidMappings: []syscall.SysProcIDMap{
+							{ContainerID: c.opts.ContainerUID, HostID: os.Geteuid(), Size: 1},
+						},
+						GidMappings: []syscall.SysProcIDMap{
+							{ContainerID: c.opts.ContainerGID, HostID: os.Getegid(), Size: 1},
+						},
+					}
 				}
-			} else if c.opts.ContainerUID != 0 {
-				proc.SysProcAttr = &syscall.SysProcAttr{
-					Cloneflags: syscall.CLONE_NEWUSER,
-					Credential: &syscall.Credential{Uid: uint32(c.opts.ContainerUID), Gid: uint32(c.opts.ContainerGID)},
-					UidMappings: []syscall.SysProcIDMap{
-						{ContainerID: c.opts.ContainerUID, HostID: os.Geteuid(), Size: 1},
-					},
-					GidMappings: []syscall.SysProcIDMap{
-						{ContainerID: c.opts.ContainerGID, HostID: os.Getegid(), Size: 1},
-					},
-				}
-			}
 
-			return proc.Run()
+				throw.Throw(proc.Run())
+			}).AsError()
 		},
 	}
 
@@ -141,101 +123,68 @@ func (c *childUnixSocketConn) Close() error {
 	return unix.Close(c.socketFd)
 }
 
-func (c *childUnixSocketConn) SendFd(fd int) error {
+func (c *childUnixSocketConn) SendFd(fd int) {
 	rights := unix.UnixRights(fd)
-	return unix.Sendmsg(c.socketFd, nil, rights, nil, 0)
+	throw.Throw(unix.Sendmsg(c.socketFd, nil, rights, nil, 0))
 }
 
-func (c *childUnixSocketConn) SendMTU(mtu uint32) error {
-	data, err := json.Marshal(&MTUMessage{MTU: mtu})
-	if err != nil {
-		return err
-	}
-	_, err = c.socketFile.Write(data)
-	return err
+func (c *childUnixSocketConn) SendMTU(mtu uint32) {
+	data := throw.Throw2(json.Marshal(&MTUMessage{MTU: mtu}))
+	throw.Throw2(c.socketFile.Write(data))
 }
 
-func (c *childUnixSocketConn) ReceiveACK() (err error) {
+func (c *childUnixSocketConn) ReceiveACK() {
 	var msg ACKMessage
-	if err = json.NewDecoder(c.socketFile).Decode(&msg); err != nil {
-		return
-	}
+	throw.Throw(json.NewDecoder(c.socketFile).Decode(&msg))
 	if !msg.ACK {
-		return errors.New("network stack initialization is not acknowledged")
+		throw.Throw(errors.New("network stack initialization is not acknowledged"))
 	}
-	return
 }
 
 type MTUMessage struct {
 	MTU uint32 `json:"mtu"`
 }
 
-func setupIPNetwork() error {
-	lo, err := netlink.LinkByName(loDevice)
-	if err != nil {
-		return err
-	}
-	if err = netlink.LinkSetUp(lo); err != nil {
-		return err
-	}
+func setupIPNetwork() {
+	lo := throw.Throw2(netlink.LinkByName(loDevice))
+	throw.Throw(netlink.LinkSetUp(lo))
 
-	tun0, tunAddr, err := setupIPAddress(tunDevice, tunNetworkAddr)
-	if err != nil {
-		return err
-	}
+	tun0, tunAddr := setupIPAddress(tunDevice, tunNetworkAddr)
 
-	return netlink.RouteAdd(&netlink.Route{
+	throw.Throw(netlink.RouteAdd(&netlink.Route{
 		Gw:        tunAddr.IP,
 		LinkIndex: tun0.Attrs().Index,
-	})
+	}))
 }
 
 const resolvConfTmpDir = "/tmp/.wirez-resolv"
 
-func setupResolvConf() error {
+func setupResolvConf() {
 	// Prevent mount propagation to the host.
-	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
-		return fmt.Errorf("make root private: %w", err)
-	}
+	throw.Throw(unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""))
+
 	// Parse TUN IP and use next IP in subnet as nameserver,
 	// because the TUN IP itself is a local address and packets to it
 	// don't traverse the TUN device.
-	ip, _, err := net.ParseCIDR(tunNetworkAddr)
-	if err != nil {
-		return err
-	}
+	ip, _ := throw.Throw3(net.ParseCIDR(tunNetworkAddr))
 	ip = ip.To4()
 	ip[3]++
+
 	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
-	if err := os.MkdirAll(resolvConfTmpDir, 0755); err != nil {
-		return err
-	}
-	if err := unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"); err != nil {
-		return fmt.Errorf("mount tmpfs: %w", err)
-	}
+	throw.Throw(os.MkdirAll(resolvConfTmpDir, 0755))
+	throw.Throw(unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"))
+
 	tmpFile := resolvConfTmpDir + "/resolv.conf"
-	if err := os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644); err != nil {
-		return err
-	}
+	throw.Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
+
 	// Bind mount over /etc/resolv.conf.
-	if err := unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""); err != nil {
-		return fmt.Errorf("bind mount resolv.conf: %w", err)
-	}
-	return nil
+	throw.Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
 }
 
-func setupIPAddress(device, networkAddr string) (dev netlink.Link, addr *netlink.Addr, err error) {
-	dev, err = netlink.LinkByName(device)
-	if err != nil {
-		return
-	}
-	if err = netlink.LinkSetUp(dev); err != nil {
-		return
-	}
-	addr, err = netlink.ParseAddr(networkAddr)
-	if err != nil {
-		return
-	}
-	err = netlink.AddrAdd(dev, addr)
-	return
+func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {
+	dev := throw.Throw2(netlink.LinkByName(device))
+	throw.Throw(netlink.LinkSetUp(dev))
+	addr := throw.Throw2(netlink.ParseAddr(networkAddr))
+	throw.Throw(netlink.AddrAdd(dev, addr))
+	return dev, addr
 }

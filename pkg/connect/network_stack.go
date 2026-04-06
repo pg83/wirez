@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -57,46 +58,35 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 		}),
 	}
 
-	ep, err := fdbased.New(&fdbased.Options{
+	ep := throw.Throw2(fdbased.New(&fdbased.Options{
 		MTU: mtu,
 		FDs: []int{fd},
 		// TUN only
 		EthernetHeader: false,
-	})
-	if err != nil {
-		return nil, err
-	}
+	}))
 
 	var defaultNICID tcpip.NICID = 0x01
 	if err := s.CreateNIC(defaultNICID, ep); err != nil {
 		return nil, errors.New(err.String())
 	}
-
 	if err := s.SetPromiscuousMode(defaultNICID, true); err != nil {
 		return nil, errors.New(err.String())
 	}
 	if err := s.SetSpoofing(defaultNICID, true); err != nil {
 		return nil, errors.New(err.String())
 	}
-	if err = s.SetupRouting(defaultNICID, tunNetworkAddr); err != nil {
-		return nil, err
-	}
+
+	s.setupRouting(defaultNICID, tunNetworkAddr)
 
 	s.setTCPHandler()
 	s.setUDPHandler()
 	return s, nil
 }
 
-func (s *NetworkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
-	_, ipNet, err := net.ParseCIDR(assignNet)
-	if err != nil {
-		return fmt.Errorf("unable to ParseCIDR(%s): %w", assignNet, err)
-	}
+func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
+	_, ipNet := throw.Throw3(net.ParseCIDR(assignNet))
 
-	subnet, err := tcpip.NewSubnet(tcpip.Address(ipNet.IP), tcpip.AddressMask(ipNet.Mask))
-	if err != nil {
-		return fmt.Errorf("unable to NewSubnet(%s): %w", ipNet, err)
-	}
+	subnet := throw.Throw2(tcpip.NewSubnet(tcpip.Address(ipNet.IP), tcpip.AddressMask(ipNet.Mask)))
 
 	rt := s.GetRouteTable()
 	rt = append(rt, tcpip.Route{
@@ -104,7 +94,7 @@ func (s *NetworkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
 		NIC:         nic,
 	})
 	s.SetRouteTable(rt)
-	return nil
+	s.log.Debug().Str("subnet", subnet.String()).Msg("gVisor routing configured")
 }
 
 func (s *NetworkStack) setTCPHandler() {
@@ -124,9 +114,11 @@ func (s *NetworkStack) setTCPHandler() {
 		r.Complete(false)
 
 		go func() {
-			if err := s.handleTCP(gonet.NewTCPConn(&wq, ep), &id); err != nil {
-				s.log.Error().Str("handler", "tcp").Err(err).Msg("")
-			}
+			throw.Try(func() {
+				s.handleTCP(gonet.NewTCPConn(&wq, ep), &id)
+			}).Catch(func(exc *throw.Exception) {
+				s.log.Error().Str("handler", "tcp").Err(exc).Msg("")
+			})
 		}()
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
@@ -145,34 +137,33 @@ func (s *NetworkStack) setUDPHandler() {
 			return
 		}
 		go func() {
-			if err := s.handleUDP(gonet.NewUDPConn(s.Stack, &wq, ep), &id); err != nil {
-				s.log.Error().Str("handler", "udp").Err(err).Msg("")
-			}
+			throw.Try(func() {
+				s.handleUDP(gonet.NewUDPConn(s.Stack, &wq, ep), &id)
+			}).Catch(func(exc *throw.Exception) {
+				s.log.Error().Str("handler", "udp").Err(exc).Msg("")
+			})
 		}()
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
 
-func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) (err error) {
+func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) {
 	defer localConn.Close()
 
 	address := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
-	dstConn, err := s.socksTCPConn.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return
-	}
+	dstConn := throw.Throw2(s.socksTCPConn.DialContext(ctx, "tcp", address))
 	defer dstConn.Close()
 
 	localConn = NewTimeoutConn(localConn, s.TcpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.TcpIOTimeout)
 	// relay TCP connections
-	return s.transporter.Transport(localConn, dstConn)
+	throw.Throw(s.transporter.Transport(localConn, dstConn))
 }
 
-func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) (err error) {
+func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) {
 	defer localConn.Close()
 
 	dstAddress := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
@@ -180,16 +171,13 @@ func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpoint
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
-	dstConn, err := s.socksUDPConn.DialContext(ctx, "udp", dstAddress)
-	if err != nil {
-		return
-	}
+	dstConn := throw.Throw2(s.socksUDPConn.DialContext(ctx, "udp", dstAddress))
 	defer dstConn.Close()
 
 	localConn = NewTimeoutConn(localConn, s.UdpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.UdpIOTimeout)
 	// relay UDP connections
-	return s.transporter.Transport(localConn, dstConn)
+	throw.Throw(s.transporter.Transport(localConn, dstConn))
 }
 
 // defaultIPTables creates iptables rules that allow only TCP and UDP traffic

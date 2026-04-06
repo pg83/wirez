@@ -7,7 +7,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/v-byte-cpu/wirez/pkg/connect"
+	"github.com/v-byte-cpu/wirez/pkg/throw"
 )
+
+func tryErr(fn func()) error {
+	return throw.Try(fn).AsError()
+}
 
 func TestParseProxyURL(t *testing.T) {
 	tests := []struct {
@@ -94,7 +99,10 @@ func TestParseProxyURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			socksAddr, err := parseProxyURL(tt.input)
+			var socksAddr *connect.SocksAddr
+			err := tryErr(func() {
+				socksAddr = parseProxyURL(tt.input)
+			})
 			if tt.expectedErr {
 				require.Error(t, err)
 			} else {
@@ -130,7 +138,10 @@ func TestParseProxyURLs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			socksAddrs, err := parseProxyURLs(tt.input)
+			var socksAddrs []*connect.SocksAddr
+			err := tryErr(func() {
+				socksAddrs = parseProxyURLs(tt.input)
+			})
 			if tt.expectedErr {
 				require.Error(t, err)
 			} else {
@@ -264,7 +275,10 @@ func TestParseProxyFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			socksAddrs, err := parseProxyFile(strings.NewReader(tt.input))
+			var socksAddrs []*connect.SocksAddr
+			err := tryErr(func() {
+				socksAddrs = parseProxyFile(strings.NewReader(tt.input))
+			})
 			if tt.expectedErr {
 				require.Error(t, err)
 			} else {
@@ -277,131 +291,166 @@ func TestParseProxyFile(t *testing.T) {
 
 func TestParseMapping(t *testing.T) {
 	t.Run("OneFullUDPMapping", func(t *testing.T) {
-		network, fromAddress, toAddress, err := parseMapping("1.1.1.1:53:127.0.0.1:5341/udp")
+		var network, fromAddress, toAddress string
+		err := tryErr(func() {
+			network, fromAddress, toAddress = parseMapping("1.1.1.1:53:127.0.0.1:5341/udp")
+		})
 		require.NoError(t, err)
 		require.Equal(t, "udp", network)
 		require.Equal(t, "1.1.1.1:53", fromAddress)
 		require.Equal(t, "127.0.0.1:5341", toAddress)
 	})
 	t.Run("OneFullTCPMapping", func(t *testing.T) {
-		network, fromAddress, toAddress, err := parseMapping("1.1.1.1:53:127.0.0.1:5341/tcp")
+		var network, fromAddress, toAddress string
+		err := tryErr(func() {
+			network, fromAddress, toAddress = parseMapping("1.1.1.1:53:127.0.0.1:5341/tcp")
+		})
 		require.NoError(t, err)
 		require.Equal(t, "tcp", network)
 		require.Equal(t, "1.1.1.1:53", fromAddress)
 		require.Equal(t, "127.0.0.1:5341", toAddress)
 	})
 	t.Run("OnePortUDPMapping", func(t *testing.T) {
-		network, fromAddress, toAddress, err := parseMapping("53:127.0.0.1:5341/udp")
+		var network, fromAddress, toAddress string
+		err := tryErr(func() {
+			network, fromAddress, toAddress = parseMapping("53:127.0.0.1:5341/udp")
+		})
 		require.NoError(t, err)
 		require.Equal(t, "udp", network)
 		require.Equal(t, ":53", fromAddress)
 		require.Equal(t, "127.0.0.1:5341", toAddress)
 	})
 	t.Run("InvalidTargetPortMapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("53:127.0.0.1:abc/udp")
+		err := tryErr(func() { parseMapping("53:127.0.0.1:abc/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidFromPortMapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("1.1.1.1:abc:127.0.0.1:5353/udp")
+		err := tryErr(func() { parseMapping("1.1.1.1:abc:127.0.0.1:5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidEmptyFromPortMapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("127.0.0.1:5353/udp")
+		err := tryErr(func() { parseMapping("127.0.0.1:5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("OneMappingWithoutNetwork", func(t *testing.T) {
-		network, fromAddress, toAddress, err := parseMapping("2.2.2.2:8080:127.0.0.1:5341")
+		var network, fromAddress, toAddress string
+		err := tryErr(func() {
+			network, fromAddress, toAddress = parseMapping("2.2.2.2:8080:127.0.0.1:5341")
+		})
 		require.NoError(t, err)
 		require.Equal(t, "tcp", network)
 		require.Equal(t, "2.2.2.2:8080", fromAddress)
 		require.Equal(t, "127.0.0.1:5341", toAddress)
 	})
 	t.Run("InvalidMappingWithDoubledSourceIP", func(t *testing.T) {
-		_, _, _, err := parseMapping("2.2.2.2:2.2.2.2:8080:127.0.0.1:5341")
+		err := tryErr(func() { parseMapping("2.2.2.2:2.2.2.2:8080:127.0.0.1:5341") })
 		require.Error(t, err)
 	})
 	t.Run("OneTargetIPv6Mapping", func(t *testing.T) {
-		network, fromAddress, toAddress, err := parseMapping("1.1.1.1:53:[::1]:5353/udp")
+		var network, fromAddress, toAddress string
+		err := tryErr(func() {
+			network, fromAddress, toAddress = parseMapping("1.1.1.1:53:[::1]:5353/udp")
+		})
 		require.NoError(t, err)
 		require.Equal(t, "udp", network)
 		require.Equal(t, "1.1.1.1:53", fromAddress)
 		require.Equal(t, "[::1]:5353", toAddress)
 	})
 	t.Run("OneSourceIPv6Mapping", func(t *testing.T) {
-		network, fromAddress, toAddress, err := parseMapping("[2001:db8::2:1]:5353:1.1.1.1:53/udp")
+		var network, fromAddress, toAddress string
+		err := tryErr(func() {
+			network, fromAddress, toAddress = parseMapping("[2001:db8::2:1]:5353:1.1.1.1:53/udp")
+		})
 		require.NoError(t, err)
 		require.Equal(t, "udp", network)
 		require.Equal(t, "[2001:db8::2:1]:5353", fromAddress)
 		require.Equal(t, "1.1.1.1:53", toAddress)
 	})
 	t.Run("InvalidTargetEmptyMapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("1.1.1.1:53::5353/udp")
+		err := tryErr(func() { parseMapping("1.1.1.1:53::5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidTargetIPv6MissingBracketMapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("1.1.1.1:53:1]:5353/udp")
+		err := tryErr(func() { parseMapping("1.1.1.1:53:1]:5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidTargetIPv6Mapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("1.1.1.1:53:[abc]:5353/udp")
+		err := tryErr(func() { parseMapping("1.1.1.1:53:[abc]:5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidTargetEmptyIPv6Mapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("1.1.1.1:53:[]:5353/udp")
+		err := tryErr(func() { parseMapping("1.1.1.1:53:[]:5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("MissingColonBetweenFromPortAndTargetHostIPv6", func(t *testing.T) {
-		_, _, _, err := parseMapping("1.1.1.1:53[2001:db8::2:1]:5353/udp")
+		err := tryErr(func() { parseMapping("1.1.1.1:53[2001:db8::2:1]:5353/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidSourceIPv6MissingBracketMapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("1]:5353:1.1.1.1:53/udp")
+		err := tryErr(func() { parseMapping("1]:5353:1.1.1.1:53/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidSourceIPv6Mapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("[abc]:5353:1.1.1.1:53/udp")
+		err := tryErr(func() { parseMapping("[abc]:5353:1.1.1.1:53/udp") })
 		require.Error(t, err)
 	})
 	t.Run("InvalidSourceEmptyIPv6Mapping", func(t *testing.T) {
-		_, _, _, err := parseMapping("[]:5353:1.1.1.1:53/udp")
+		err := tryErr(func() { parseMapping("[]:5353:1.1.1.1:53/udp") })
 		require.Error(t, err)
 	})
 }
 
 func TestParseAddressMapper(t *testing.T) {
 	t.Run("EmptyMapper", func(t *testing.T) {
-		m, err := parseAddressMapper(nil)
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper(nil)
+		})
 		require.NoError(t, err)
 		_, exists := m.MapAddress("udp", "8.8.8.8:53")
 		require.False(t, exists)
 	})
 	t.Run("OneFullUDPMapping", func(t *testing.T) {
-		m, err := parseAddressMapper([]string{"8.8.8.8:53:127.0.0.1:5341/udp"})
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper([]string{"8.8.8.8:53:127.0.0.1:5341/udp"})
+		})
 		require.NoError(t, err)
 		targetAddress, exists := m.MapAddress("udp", "8.8.8.8:53")
 		require.True(t, exists)
 		require.Equal(t, "127.0.0.1:5341", targetAddress)
 	})
 	t.Run("OneFullTCPMapping", func(t *testing.T) {
-		m, err := parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/tcp"})
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/tcp"})
+		})
 		require.NoError(t, err)
 		targetAddress, exists := m.MapAddress("tcp", "1.1.1.1:53")
 		require.True(t, exists)
 		require.Equal(t, "127.0.0.1:5341", targetAddress)
 	})
 	t.Run("OnePortUDPMapping", func(t *testing.T) {
-		m, err := parseAddressMapper([]string{"53:127.0.0.1:5341/udp"})
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper([]string{"53:127.0.0.1:5341/udp"})
+		})
 		require.NoError(t, err)
 		targetAddress, exists := m.MapAddress("udp", "8.8.8.8:53")
 		require.True(t, exists)
 		require.Equal(t, "127.0.0.1:5341", targetAddress)
 	})
 	t.Run("OneMappingWithError", func(t *testing.T) {
-		_, err := parseAddressMapper([]string{"1.1.1.1:abc:127.0.0.1:5353/udp"})
+		err := tryErr(func() {
+			parseAddressMapper([]string{"1.1.1.1:abc:127.0.0.1:5353/udp"})
+		})
 		require.Error(t, err)
 	})
 	t.Run("TwoFullAddressMappings", func(t *testing.T) {
-		m, err := parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/udp", "2.2.2.2:53:1.1.1.1:5341/udp"})
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/udp", "2.2.2.2:53:1.1.1.1:5341/udp"})
+		})
 		require.NoError(t, err)
 		targetAddress, exists := m.MapAddress("udp", "1.1.1.1:53")
 		require.True(t, exists)
@@ -411,7 +460,10 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Equal(t, "1.1.1.1:5341", targetAddress)
 	})
 	t.Run("TwoFullUDPAndTCPSameAddressMappings", func(t *testing.T) {
-		m, err := parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/udp", "1.1.1.1:53:8.8.8.8:1234/tcp"})
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/udp", "1.1.1.1:53:8.8.8.8:1234/tcp"})
+		})
 		require.NoError(t, err)
 		targetAddress, exists := m.MapAddress("udp", "1.1.1.1:53")
 		require.True(t, exists)
@@ -421,11 +473,16 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Equal(t, "8.8.8.8:1234", targetAddress)
 	})
 	t.Run("TwoFullAddressMappingsWithError", func(t *testing.T) {
-		_, err := parseAddressMapper([]string{"1.1.1.1:abc:127.0.0.1:5341/udp", "2.2.2.2:53:1.1.1.1:5341/udp"})
+		err := tryErr(func() {
+			parseAddressMapper([]string{"1.1.1.1:abc:127.0.0.1:5341/udp", "2.2.2.2:53:1.1.1.1:5341/udp"})
+		})
 		require.Error(t, err)
 	})
 	t.Run("TwoPortMappings", func(t *testing.T) {
-		m, err := parseAddressMapper([]string{"53:127.0.0.1:5341/udp", "8080:127.0.0.1:4444/udp"})
+		var m connect.AddressMapper
+		err := tryErr(func() {
+			m = parseAddressMapper([]string{"53:127.0.0.1:5341/udp", "8080:127.0.0.1:4444/udp"})
+		})
 		require.NoError(t, err)
 		targetAddress, exists := m.MapAddress("udp", "1.1.1.1:53")
 		require.True(t, exists)
