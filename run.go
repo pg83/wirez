@@ -58,6 +58,7 @@ func runRun(log *slog.Logger, args []string) error {
 		nat := parseAddressMapper(localMappings)
 
 		parentFd, childFd := newUnixSocketPair()
+
 		defer unix.Close(parentFd)
 		defer unix.Close(childFd)
 
