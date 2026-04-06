@@ -27,11 +27,9 @@ func runContainer(args []string) error {
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
 	privileged := fs.Bool("privileged", false, "indicates if started with root privileges")
 
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
 	return Try(func() {
+		Throw(fs.Parse(args))
+
 		Throw(syscall.Sethostname([]byte(*hostname)))
 
 		childConn := newChildUnixSocketConn(*pipeFd)

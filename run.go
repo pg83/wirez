@@ -30,11 +30,9 @@ func runRun(log *slog.Logger, args []string) error {
 	uid := fs.Int("uid", os.Geteuid(), "set uid of container process")
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
 
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
 	return Try(func() {
+		Throw(fs.Parse(args))
+
 		if *uid < 0 {
 			ThrowFmt("uid is negative")
 		}
