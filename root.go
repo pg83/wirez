@@ -7,7 +7,7 @@ import (
 	"os/exec"
 )
 
-func Main() {
+func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	if len(os.Args) < 2 {
