@@ -236,51 +236,32 @@ func (c *socksUDPConn) Write(b []byte) (n int, err error) {
 }
 
 func (c *socksUDPConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
-	toAddr, err := gosocks5.NewAddr(addr.String())
+	err = Try(func() {
+		toAddr := Throw2(gosocks5.NewAddr(addr.String()))
 
-	if err != nil {
-		return
-	}
+		// TODO buffer pool
+		buf := &bytes.Buffer{}
+		h := &gosocks5.UDPHeader{Addr: toAddr}
+		Throw(h.Write(buf))
+		Throw2(buf.Write(b))
+		Throw2(c.Conn.Write(buf.Bytes()))
 
-	// TODO buffer pool
-	buf := &bytes.Buffer{}
-	h := &gosocks5.UDPHeader{Addr: toAddr}
+		n = len(b)
+	}).AsError()
 
-	if err = h.Write(buf); err != nil {
-		return
-	}
-
-	if _, err = buf.Write(b); err != nil {
-		return
-	}
-
-	_, err = c.Conn.Write(buf.Bytes())
-
-	return len(b), err
+	return
 }
 
-func (c *socksUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, err := c.Conn.Read(b)
+func (c *socksUDPConn) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
+	err = Try(func() {
+		rn := Throw2(c.Conn.Read(b))
+		packet := Throw2(gosocks5.ReadUDPDatagram(bytes.NewBuffer(b[:rn])))
+		copy(b, packet.Data)
+		n = len(packet.Data)
+		addr = Throw2(net.ResolveUDPAddr("udp", packet.Header.Addr.String()))
+	}).AsError()
 
-	if err != nil {
-		return 0, nil, err
-	}
-
-	buf := bytes.NewBuffer(b[:n])
-	packet, err := gosocks5.ReadUDPDatagram(buf)
-
-	if err != nil {
-		return 0, nil, err
-	}
-
-	copy(b, packet.Data)
-	fromAddr, err := net.ResolveUDPAddr("udp", packet.Header.Addr.String())
-
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return len(packet.Data), fromAddr, nil
+	return
 }
 
 func (c *socksUDPConn) Close() error {
@@ -345,29 +326,22 @@ func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, ok := m.nat[network]; !ok {
-		m.nat[network] = make(map[string]string)
-	}
+	return Try(func() {
+		if _, ok := m.nat[network]; !ok {
+			m.nat[network] = make(map[string]string)
+		}
 
-	if !strings.Contains(fromAddress, ":") {
-		fromAddress = ":" + fromAddress
-	}
+		if !strings.Contains(fromAddress, ":") {
+			fromAddress = ":" + fromAddress
+		}
 
-	host, port, err := net.SplitHostPort(fromAddress)
+		host, port := Throw3(net.SplitHostPort(fromAddress))
+		Throw2(strconv.ParseUint(port, 10, 16))
 
-	if err != nil {
-		return err
-	}
+		if host == "" || host == "0.0.0.0" {
+			fromAddress = port
+		}
 
-	if _, err = strconv.ParseUint(port, 10, 16); err != nil {
-		return err
-	}
-
-	if host == "" || host == "0.0.0.0" {
-		fromAddress = port
-	}
-
-	m.nat[network][fromAddress] = toAddress
-
-	return nil
+		m.nat[network][fromAddress] = toAddress
+	}).AsError()
 }
