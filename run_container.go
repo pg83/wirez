@@ -80,6 +80,7 @@ func newRunContainerCmd() *runContainerCmd {
 	c.opts.initCliFlags(cmd)
 
 	c.cmd = cmd
+
 	return c
 }
 

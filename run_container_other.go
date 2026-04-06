@@ -27,6 +27,7 @@ func newRunContainerCmd() *runContainerCmd {
 	}
 
 	c.cmd = cmd
+
 	return c
 }
 

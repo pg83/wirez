@@ -78,6 +78,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 
 	s.setTCPHandler()
 	s.setUDPHandler()
+
 	return s
 }
 
@@ -107,6 +108,7 @@ func (s *NetworkStack) setTCPHandler() {
 			s.log.Error().Str("handler", "tcp").Stringer("error", err).Msg("")
 			// prevent potential half-open TCP connection leak.
 			r.Complete(true)
+
 			return
 		}
 
@@ -134,6 +136,7 @@ func (s *NetworkStack) setUDPHandler() {
 
 		if err != nil {
 			s.log.Error().Str("handler", "udp").Stringer("error", err).Msg("")
+
 			return true
 		}
 

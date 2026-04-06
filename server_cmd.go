@@ -73,6 +73,7 @@ func newServerCmd(log *zerolog.Logger) *serverCmd {
 	c.opts.initCliFlags(cmd)
 
 	c.cmd = cmd
+
 	return c
 }
 

@@ -122,6 +122,7 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 	c.opts.initCliFlags(cmd)
 
 	c.cmd = cmd
+
 	return c
 }
 

@@ -23,6 +23,7 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 	}
 
 	c.cmd = cmd
+
 	return c
 }
 

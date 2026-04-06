@@ -197,6 +197,7 @@ func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
 
 func (c *socksRawUDPConn) Close() error {
 	err := c.Conn.Close()
+
 	return multierr.Append(err, c.tcpConn.Close())
 }
 
@@ -215,11 +216,13 @@ var _ net.Conn = (*socksUDPConn)(nil)
 
 func (c *socksUDPConn) Read(b []byte) (n int, err error) {
 	n, _, err = c.ReadFrom(b)
+
 	return
 }
 
 func (c *socksUDPConn) Write(b []byte) (n int, err error) {
 	n, err = c.WriteTo(b, c.dstAddr)
+
 	return n, err
 }
 
@@ -243,6 +246,7 @@ func (c *socksUDPConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	}
 
 	_, err = c.Conn.Write(buf.Bytes())
+
 	return len(b), err
 }
 
@@ -272,6 +276,7 @@ func (c *socksUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 
 func (c *socksUDPConn) Close() error {
 	err := c.Conn.Close()
+
 	return multierr.Append(err, c.tcpConn.Close())
 }
 
@@ -289,6 +294,7 @@ type rotationConnector struct {
 
 func (c *rotationConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
 	i := int(atomic.AddUint32(&c.robin, 1) % uint32(len(c.connectors)))
+
 	return c.connectors[i].DialContext(ctx, network, address)
 }
 
@@ -340,6 +346,7 @@ func (m *addressMapper) MapAddress(network, address string) (mappedAddress strin
 
 	port := address[strings.LastIndex(address, ":")+1:]
 	mappedAddress, exists = m.nat[network][port]
+
 	return
 }
 
@@ -370,5 +377,6 @@ func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string
 	}
 
 	m.nat[network][fromAddress] = toAddress
+
 	return nil
 }

@@ -25,6 +25,7 @@ func parseProxyFile(proxyFile io.Reader) []*SocksAddr {
 	}
 
 	Throw(bs.Err())
+
 	return socksAddrs
 }
 
@@ -91,6 +92,7 @@ func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 
 	fromAddress = net.JoinHostPort(fromHost, fromPort)
 	targetAddress = net.JoinHostPort(targetHost, targetPort)
+
 	return
 }
 
@@ -179,5 +181,6 @@ func setLogLevel(log *zerolog.Logger, verboseLevel int) *zerolog.Logger {
 	}
 
 	result := log.Level(level)
+
 	return &result
 }
