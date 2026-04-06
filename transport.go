@@ -3,11 +3,10 @@ package main
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
-
-	"github.com/rs/zerolog"
 )
 
 var (
@@ -48,12 +47,12 @@ type Transporter interface {
 	Transport(rw1, rw2 io.ReadWriter) error
 }
 
-func NewTransporter(log *zerolog.Logger) Transporter {
+func NewTransporter(log *slog.Logger) Transporter {
 	return &transporter{log}
 }
 
 type transporter struct {
-	log *zerolog.Logger
+	log *slog.Logger
 }
 
 func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
@@ -72,7 +71,7 @@ func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
 
 	err := <-errc
 
-	t.log.Debug().Err(err).Msg("close connection")
+	t.log.Debug("close connection", "err", err)
 	var terr timeoutError
 
 	if err == io.EOF || (errors.As(err, &terr) && terr.Timeout()) {

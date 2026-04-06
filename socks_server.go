@@ -3,16 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"time"
 
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/server"
-	"github.com/rs/zerolog"
 	"go.uber.org/multierr"
 )
 
-func NewSOCKS5ServerHandler(log *zerolog.Logger, socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) server.Handler {
+func NewSOCKS5ServerHandler(log *slog.Logger, socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) server.Handler {
 	return &serverHandler{
 		log: log, selector: server.DefaultSelector,
 		socksTCPConn: socksTCPConn, socksUDPConn: socksUDPConn, transporter: transporter,
@@ -23,7 +23,7 @@ func NewSOCKS5ServerHandler(log *zerolog.Logger, socksTCPConn Connector, socksUD
 }
 
 type serverHandler struct {
-	log            *zerolog.Logger
+	log            *slog.Logger
 	selector       gosocks5.Selector
 	socksTCPConn   Connector
 	socksUDPConn   Connector
@@ -36,7 +36,7 @@ type serverHandler struct {
 func (h *serverHandler) Handle(conn net.Conn) (err error) {
 	defer func() {
 		if err != nil {
-			h.log.Error().Err(err).Msg("")
+			h.log.Error("error", "err", err)
 		}
 	}()
 

@@ -5,11 +5,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net"
 	"time"
-
-	"github.com/rs/zerolog"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -24,7 +23,7 @@ import (
 
 type NetworkStack struct {
 	*stack.Stack
-	log            *zerolog.Logger
+	log            *slog.Logger
 	socksTCPConn   Connector
 	socksUDPConn   Connector
 	transporter    Transporter
@@ -33,7 +32,7 @@ type NetworkStack struct {
 	ConnectTimeout time.Duration
 }
 
-func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr string,
+func NewNetworkStack(log *slog.Logger, fd int, mtu uint32, tunNetworkAddr string,
 	socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) *NetworkStack {
 	s := &NetworkStack{
 		log:            log,
@@ -93,20 +92,20 @@ func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
 		NIC:         nic,
 	})
 	s.SetRouteTable(rt)
-	s.log.Debug().Str("subnet", subnet.String()).Msg("gVisor routing configured")
+	s.log.Debug("gVisor routing configured", "subnet", subnet.String())
 }
 
 func (s *NetworkStack) setTCPHandler() {
 	tcpForwarder := tcp.NewForwarder(s.Stack, 0, 2<<10, func(r *tcp.ForwarderRequest) {
 		var wq waiter.Queue
 		id := r.ID()
-		s.log.Debug().Str("handler", "tcp").
-			Stringer("localAddress", id.LocalAddress).Uint16("localPort", id.LocalPort).
-			Stringer("fromAddress", id.RemoteAddress).Uint16("fromPort", id.RemotePort).Msg("received request")
+		s.log.Debug("tcp: received request",
+			"localAddress", id.LocalAddress, "localPort", id.LocalPort,
+			"fromAddress", id.RemoteAddress, "fromPort", id.RemotePort)
 		ep, err := r.CreateEndpoint(&wq)
 
 		if err != nil {
-			s.log.Error().Str("handler", "tcp").Stringer("error", err).Msg("")
+			s.log.Error("tcp: error", "err", err)
 			// prevent potential half-open TCP connection leak.
 			r.Complete(true)
 
@@ -119,7 +118,7 @@ func (s *NetworkStack) setTCPHandler() {
 			Try(func() {
 				s.handleTCP(gonet.NewTCPConn(&wq, ep), &id)
 			}).Catch(func(exc *Exception) {
-				s.log.Error().Str("handler", "tcp").Err(exc).Msg("")
+				s.log.Error("tcp: error", "err", exc)
 			})
 		}()
 	})
@@ -130,13 +129,13 @@ func (s *NetworkStack) setUDPHandler() {
 	udpForwarder := udp.NewForwarder(s.Stack, func(r *udp.ForwarderRequest) bool {
 		var wq waiter.Queue
 		id := r.ID()
-		s.log.Debug().Str("handler", "udp").
-			Stringer("localAddress", id.LocalAddress).Uint16("localPort", id.LocalPort).
-			Stringer("fromAddress", id.RemoteAddress).Uint16("fromPort", id.RemotePort).Msg("received request")
+		s.log.Debug("udp: received request",
+			"localAddress", id.LocalAddress, "localPort", id.LocalPort,
+			"fromAddress", id.RemoteAddress, "fromPort", id.RemotePort)
 		ep, err := r.CreateEndpoint(&wq)
 
 		if err != nil {
-			s.log.Error().Str("handler", "udp").Stringer("error", err).Msg("")
+			s.log.Error("udp: error", "err", err)
 
 			return true
 		}
@@ -145,7 +144,7 @@ func (s *NetworkStack) setUDPHandler() {
 			Try(func() {
 				s.handleUDP(gonet.NewUDPConn(&wq, ep), &id)
 			}).Catch(func(exc *Exception) {
-				s.log.Error().Str("handler", "udp").Err(exc).Msg("")
+				s.log.Error("udp: error", "err", exc)
 			})
 		}()
 
@@ -172,7 +171,7 @@ func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpoint
 	defer localConn.Close()
 	dstAddress := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
 
-	s.log.Debug().Str("dstAddr", dstAddress).Msg("handleUDP called")
+	s.log.Debug("handleUDP called", "dstAddr", dstAddress)
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()

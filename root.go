@@ -2,30 +2,29 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
-	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 )
 
 func Main(version string) {
-	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).With().Timestamp().Logger()
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	if err := newRootCmd(&log, version).Execute(); err != nil {
+	if err := newRootCmd(log, version).Execute(); err != nil {
 		var exitError *exec.ExitError
 
 		if errors.As(err, &exitError) {
 			os.Exit(exitError.ExitCode())
 		}
 
-		log.Error().Err(err).Msg("")
+		log.Error("error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func newRootCmd(log *zerolog.Logger, version string) *cobra.Command {
+func newRootCmd(log *slog.Logger, version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "wirez",
 		Short:         "socks5 proxy rotator",

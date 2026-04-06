@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"log/slog"
+
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/client"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"go.uber.org/multierr"
 )
 
@@ -95,7 +95,7 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 	return
 }
 
-func NewSOCKS5UDPConnector(log *zerolog.Logger, tcpConnector Connector, udpConnector Connector, socksAddr *SocksAddr) Connector {
+func NewSOCKS5UDPConnector(log *slog.Logger, tcpConnector Connector, udpConnector Connector, socksAddr *SocksAddr) Connector {
 	selector := client.DefaultSelector
 
 	if socksAddr.Auth != nil {
@@ -112,7 +112,7 @@ func NewSOCKS5UDPConnector(log *zerolog.Logger, tcpConnector Connector, udpConne
 }
 
 type socks5UDPConnector struct {
-	log          *zerolog.Logger
+	log          *slog.Logger
 	tcpConnector Connector
 	udpConnector Connector
 	selector     gosocks5.Selector
@@ -143,7 +143,7 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 
 		Throw(req.Write(socksConn))
 
-		c.log.Debug().Str("dstAddr", address).Msg("udp cmd request write success")
+		c.log.Debug("udp cmd request write success", "dstAddr", address)
 
 		reply := Throw2(gosocks5.ReadReply(socksConn))
 
@@ -153,11 +153,11 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 
 		replyAddr := reply.Addr.String()
 
-		c.log.Debug().Str("dstAddr", address).Str("replyAddr", replyAddr).Msg("udp cmd reply success")
+		c.log.Debug("udp cmd reply success", "dstAddr", address, "replyAddr", replyAddr)
 
 		uc := Throw2(c.udpConnector.DialContext(ctx, "udp", replyAddr))
 
-		c.log.Debug().Str("local udp addr", uc.LocalAddr().String())
+		c.log.Debug("local udp addr", "addr", uc.LocalAddr().String())
 
 		//nolint:errcheck
 		go func() {
@@ -199,7 +199,7 @@ func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
 
 	if err != nil {
-		log.Print("rawUDPConn error: ", err)
+		slog.Error("rawUDPConn error", "err", err)
 	}
 
 	return n, err

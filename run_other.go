@@ -4,12 +4,12 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 
-	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 )
 
-func newRunCmd(log *zerolog.Logger) *runCmd {
+func newRunCmd(log *slog.Logger) *runCmd {
 	c := &runCmd{}
 
 	cmd := &cobra.Command{

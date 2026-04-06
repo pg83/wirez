@@ -3,12 +3,13 @@ package main
 import (
 	"bufio"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
-	"github.com/rs/zerolog"
 	"github.com/spf13/pflag"
 )
 
@@ -168,19 +169,19 @@ func (v *renamedTypeFlagValue) String() string {
 	return v.Value.String()
 }
 
-func setLogLevel(log *zerolog.Logger, verboseLevel int) *zerolog.Logger {
-	level := zerolog.InfoLevel
+func setLogLevel(verboseLevel int) *slog.Logger {
+	var level slog.Level
 
 	switch {
 	case verboseLevel < 0:
-		level = zerolog.Disabled
+		level = slog.Level(100)
+	case verboseLevel == 0:
+		level = slog.LevelInfo
 	case verboseLevel == 1:
-		level = zerolog.DebugLevel
+		level = slog.LevelDebug
 	case verboseLevel >= 2:
-		level = zerolog.TraceLevel
+		level = slog.LevelDebug - 4
 	}
 
-	result := log.Level(level)
-
-	return &result
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }

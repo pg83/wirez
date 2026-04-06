@@ -11,13 +11,14 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rs/zerolog"
+	"log/slog"
+
 	"github.com/spf13/cobra"
 	"go.uber.org/multierr"
 	"golang.org/x/sys/unix"
 )
 
-func newRunCmd(log *zerolog.Logger) *runCmd {
+func newRunCmd(log *slog.Logger) *runCmd {
 	c := &runCmd{}
 
 	cmd := &cobra.Command{
@@ -42,13 +43,13 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				}
 
 				if c.opts.Quiet {
-					log = setLogLevel(log, -1)
+					log = setLogLevel(-1)
 				} else {
-					log = setLogLevel(log, c.opts.VerboseLevel)
+					log = setLogLevel(c.opts.VerboseLevel)
 				}
 
-				log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
-				log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
+				log.Debug("forward", "proxies", c.opts.ForwardProxies)
+				log.Debug("local_address_mappings", "mappings", c.opts.LocalAddressMappings)
 
 				forwardProxies := parseProxyURLs(c.opts.ForwardProxies)
 				nat := parseAddressMapper(c.opts.LocalAddressMappings)
@@ -93,8 +94,8 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 
 				tunMTU := parentConn.ReceiveMTU()
 
-				log.Debug().Int("fd", tunFd).Msg("got tun device")
-				log.Debug().Uint32("mtu", tunMTU).Msg("")
+				log.Debug("got tun device", "fd", tunFd)
+				log.Debug("mtu", "mtu", tunMTU)
 
 				dconn := NewDirectConnector()
 

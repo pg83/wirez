@@ -3,17 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/ginuerzh/gosocks5/server"
-	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 )
 
-func newServerCmd(log *zerolog.Logger) *serverCmd {
+func newServerCmd(log *slog.Logger) *serverCmd {
 	c := &serverCmd{}
 
 	cmd := &cobra.Command{
@@ -27,7 +27,7 @@ func newServerCmd(log *zerolog.Logger) *serverCmd {
 
 				socksAddrs := parseProxyFile(f)
 
-				log.Info().Msgf("starting listening on %s...", c.opts.listenAddr)
+				log.Info("starting listening", "addr", c.opts.listenAddr)
 
 				ln := Throw2(net.Listen("tcp", c.opts.listenAddr))
 
@@ -59,7 +59,7 @@ func newServerCmd(log *zerolog.Logger) *serverCmd {
 					<-ctx.Done()
 
 					if err := srv.Close(); err != nil {
-						log.Error().Err(err).Msg("")
+						log.Error("error", "err", err)
 					}
 				}()
 
