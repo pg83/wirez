@@ -32,17 +32,21 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				if c.opts.ContainerUID < 0 {
 					ThrowFmt("uid is negative")
 				}
+
 				if c.opts.ContainerGID < 0 {
 					ThrowFmt("gid is negative")
 				}
+
 				if len(c.opts.ForwardProxies) == 0 {
 					ThrowFmt("forward proxies list is empty")
 				}
+
 				if c.opts.Quiet {
 					log = setLogLevel(log, -1)
 				} else {
 					log = setLogLevel(log, c.opts.VerboseLevel)
 				}
+
 				log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
 				log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
 				forwardProxies := parseProxyURLs(c.opts.ForwardProxies)
@@ -76,8 +80,8 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 						},
 					}
 				}
-				Throw(proc.Start())
 
+				Throw(proc.Start())
 				parentConn := newParentUnixSocketConn(parentFd)
 				tunFd := parentConn.ReceiveFd()
 				log.Debug().Int("fd", tunFd).Msg("got tun device")
@@ -90,14 +94,18 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				socksTCPConn := dconn
 				socksTCPConns := make([]Connector, 0, len(c.opts.ForwardProxies)+1)
 				socksTCPConns = append(socksTCPConns, dconn)
+
 				for _, proxyAddr := range forwardProxies {
 					socksTCPConn = NewSOCKS5Connector(socksTCPConn, proxyAddr)
 					socksTCPConns = append(socksTCPConns, socksTCPConn)
 				}
+
 				socksUDPConn := dconn
+
 				for i, proxyAddr := range forwardProxies {
 					socksUDPConn = NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
 				}
+
 				socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
 				socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
 
@@ -158,11 +166,13 @@ func newUnixSocketPair() (parentFd, childFd int) {
 
 	// set clo_exec flag on parent file descriptor
 	_, err := unix.FcntlInt(uintptr(parentFd), unix.F_SETFD, unix.FD_CLOEXEC)
+
 	if err != nil {
 		err = multierr.Append(err, unix.Close(parentFd))
 		err = multierr.Append(err, unix.Close(childFd))
 		Throw(err)
 	}
+
 	return
 }
 
@@ -191,9 +201,11 @@ func (c *parentUnixSocketConn) ReceiveFd() int {
 	// parse socket control message
 	cmsgs := Throw2(unix.ParseSocketControlMessage(b))
 	tunFds := Throw2(unix.ParseUnixRights(&cmsgs[0]))
+
 	if len(tunFds) == 0 {
 		ThrowFmt("tun fds slice is empty")
 	}
+
 	return tunFds[0]
 }
 

@@ -14,9 +14,11 @@ func Main(version string) {
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).With().Timestamp().Logger()
 	if err := newRootCmd(&log, version).Execute(); err != nil {
 		var exitError *exec.ExitError
+
 		if errors.As(err, &exitError) {
 			os.Exit(exitError.ExitCode())
 		}
+
 		log.Error().Err(err).Msg("")
 		os.Exit(1)
 	}

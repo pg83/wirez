@@ -45,9 +45,11 @@ type SocksAddr struct {
 
 func NewSOCKS5Connector(connector Connector, socksAddr *SocksAddr) Connector {
 	selector := client.DefaultSelector
+
 	if socksAddr.Auth != nil {
 		selector = client.NewClientSelector(socksAddr.Auth, gosocks5.MethodUserPass, gosocks5.MethodNoAuth)
 	}
+
 	return &socks5Connector{
 		tcpConnector: connector,
 		selector:     selector,
@@ -65,6 +67,7 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 	if network != "tcp" {
 		return nil, fmt.Errorf("network %s is not supported", network)
 	}
+
 	err = Try(func() {
 		dstAddr := Throw2(gosocks5.NewAddr(address))
 		conn = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
@@ -77,21 +80,26 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 		req := gosocks5.NewRequest(gosocks5.CmdConnect, dstAddr)
 		Throw(req.Write(conn))
 		reply := Throw2(gosocks5.ReadReply(conn))
+
 		if reply.Rep != gosocks5.Succeeded {
 			ThrowFmt("destination address [%s] is unavailable", dstAddr)
 		}
 	}).AsError()
+
 	if conn != nil {
 		err = multierr.Append(err, conn.SetDeadline(time.Time{}))
 	}
+
 	return
 }
 
 func NewSOCKS5UDPConnector(log *zerolog.Logger, tcpConnector Connector, udpConnector Connector, socksAddr *SocksAddr) Connector {
 	selector := client.DefaultSelector
+
 	if socksAddr.Auth != nil {
 		selector = client.NewClientSelector(socksAddr.Auth, gosocks5.MethodUserPass, gosocks5.MethodNoAuth)
 	}
+
 	return &socks5UDPConnector{
 		log:          log,
 		tcpConnector: tcpConnector,
@@ -113,7 +121,9 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 	if network != "udp" {
 		return nil, fmt.Errorf("network %s is not supported", network)
 	}
+
 	var socksConn net.Conn
+
 	err = Try(func() {
 		dstAddr := Throw2(gosocks5.NewAddr(address))
 		dstUDPAddr := Throw2(net.ResolveUDPAddr("udp", address))
@@ -129,14 +139,17 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 		Throw(req.Write(socksConn))
 		c.log.Debug().Str("dstAddr", address).Msg("udp cmd request write success")
 		reply := Throw2(gosocks5.ReadReply(socksConn))
+
 		if reply.Rep != gosocks5.Succeeded {
 			ThrowFmt("service unavailable")
 		}
+
 		replyAddr := reply.Addr.String()
 		c.log.Debug().Str("dstAddr", address).Str("replyAddr", replyAddr).Msg("udp cmd reply success")
 
 		uc := Throw2(c.udpConnector.DialContext(ctx, "udp", replyAddr))
 		c.log.Debug().Str("local udp addr", uc.LocalAddr().String())
+
 		//nolint:errcheck
 		go func() {
 			io.Copy(io.Discard, socksConn)
@@ -152,12 +165,15 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 			result = newSocksUDPConn(uc, socksConn, dstUDPAddr)
 		}
 	}).AsError()
+
 	if socksConn != nil {
 		err = multierr.Append(err, socksConn.SetDeadline(time.Time{}))
 	}
+
 	if err != nil && socksConn != nil {
 		err = multierr.Append(err, socksConn.Close())
 	}
+
 	return
 }
 
@@ -172,9 +188,11 @@ type socksRawUDPConn struct {
 
 func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
+
 	if err != nil {
 		log.Print("rawUDPConn error: ", err)
 	}
+
 	return n, err
 }
 
@@ -208,37 +226,48 @@ func (c *socksUDPConn) Write(b []byte) (n int, err error) {
 
 func (c *socksUDPConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	toAddr, err := gosocks5.NewAddr(addr.String())
+
 	if err != nil {
 		return
 	}
+
 	// TODO buffer pool
 	buf := &bytes.Buffer{}
 	h := &gosocks5.UDPHeader{Addr: toAddr}
+
 	if err = h.Write(buf); err != nil {
 		return
 	}
+
 	if _, err = buf.Write(b); err != nil {
 		return
 	}
+
 	_, err = c.Conn.Write(buf.Bytes())
 	return len(b), err
 }
 
 func (c *socksUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	n, err := c.Conn.Read(b)
+
 	if err != nil {
 		return 0, nil, err
 	}
+
 	buf := bytes.NewBuffer(b[:n])
 	packet, err := gosocks5.ReadUDPDatagram(buf)
+
 	if err != nil {
 		return 0, nil, err
 	}
+
 	copy(b, packet.Data)
 	fromAddr, err := net.ResolveUDPAddr("udp", packet.Header.Addr.String())
+
 	if err != nil {
 		return 0, nil, err
 	}
+
 	return len(packet.Data), fromAddr, nil
 }
 
@@ -282,6 +311,7 @@ func (c *localForwardingConnector) DialContext(ctx context.Context, network, add
 	if newAddress, ok := c.nat.MapAddress(network, address); ok {
 		return c.directConnector.DialContext(ctx, network, newAddress)
 	}
+
 	return c.socksConnector.DialContext(ctx, network, address)
 }
 
@@ -307,6 +337,7 @@ func (m *addressMapper) MapAddress(network, address string) (mappedAddress strin
 	if mappedAddress, exists = m.nat[network][address]; exists {
 		return
 	}
+
 	port := address[strings.LastIndex(address, ":")+1:]
 	mappedAddress, exists = m.nat[network][port]
 	return
@@ -318,19 +349,25 @@ func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string
 	if _, ok := m.nat[network]; !ok {
 		m.nat[network] = make(map[string]string)
 	}
+
 	if !strings.Contains(fromAddress, ":") {
 		fromAddress = ":" + fromAddress
 	}
+
 	host, port, err := net.SplitHostPort(fromAddress)
+
 	if err != nil {
 		return err
 	}
+
 	if _, err = strconv.ParseUint(port, 10, 16); err != nil {
 		return err
 	}
+
 	if host == "" || host == "0.0.0.0" {
 		fromAddress = port
 	}
+
 	m.nat[network][fromAddress] = toAddress
 	return nil
 }

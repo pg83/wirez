@@ -32,6 +32,7 @@ func (c *TimeoutConn) Read(b []byte) (n int, err error) {
 	if err = c.SetDeadline(time.Now().Add(c.IOTimeout)); err != nil {
 		return
 	}
+
 	return c.Conn.Read(b)
 }
 
@@ -39,6 +40,7 @@ func (c *TimeoutConn) Write(b []byte) (n int, err error) {
 	if err = c.SetDeadline(time.Now().Add(c.IOTimeout)); err != nil {
 		return
 	}
+
 	return c.Conn.Write(b)
 }
 
@@ -68,10 +70,13 @@ func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
 
 	err := <-errc
 	t.log.Debug().Err(err).Msg("close connection")
+
 	var terr timeoutError
+
 	if err == io.EOF || (errors.As(err, &terr) && terr.Timeout()) {
 		err = nil
 	}
+
 	return err
 }
 

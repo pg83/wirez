@@ -39,6 +39,7 @@ func (h *serverHandler) Handle(conn net.Conn) (err error) {
 			h.log.Error().Err(err).Msg("")
 		}
 	}()
+
 	return Try(func() {
 		conn = gosocks5.ServerConn(conn, h.selector)
 		defer conn.Close()
@@ -59,11 +60,12 @@ func (h *serverHandler) handleConnect(localConn net.Conn, req *gosocks5.Request)
 	ctx, cancel := context.WithTimeout(context.Background(), h.connectTimeout)
 	defer cancel()
 	dstConn, err := h.socksTCPConn.DialContext(ctx, "tcp", req.Addr.String())
+
 	if err != nil {
 		Throw(multierr.Append(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(localConn)))
 	}
-	defer dstConn.Close()
 
+	defer dstConn.Close()
 	Throw(gosocks5.NewReply(gosocks5.Succeeded, nil).Write(localConn))
 
 	localConn = NewTimeoutConn(localConn, h.tcpIOTimeout)
@@ -86,9 +88,11 @@ func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Req
 	ctx, cancel := context.WithTimeout(context.Background(), h.connectTimeout)
 	defer cancel()
 	dstAddr := net.IPv4zero
+
 	if req.Addr.Type == gosocks5.AddrIPv6 {
 		dstAddr = net.IPv6zero
 	}
+
 	dstConn := Throw2(h.socksUDPConn.DialContext(ctx, "udp", dstAddr.String()+":0"))
 	dstConn = NewTimeoutConn(dstConn, h.udpIOTimeout)
 	Throw2(dstConn.Write(buf[:n]))
@@ -106,12 +110,15 @@ type firstConnectUDPConn struct {
 
 func (c *firstConnectUDPConn) Read(b []byte) (n int, err error) {
 	n, addr, err := c.UDPConn.ReadFromUDP(b)
+
 	if err != nil {
 		return
 	}
+
 	if !addr.IP.Equal(c.targetAddr.IP) || addr.Port != c.targetAddr.Port {
 		return 0, errors.New("source ip address is invalid")
 	}
+
 	return
 }
 

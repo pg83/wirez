@@ -134,6 +134,7 @@ func (c *childUnixSocketConn) SendMTU(mtu uint32) {
 func (c *childUnixSocketConn) ReceiveACK() {
 	var msg ACKMessage
 	Throw(json.NewDecoder(c.socketFile).Decode(&msg))
+
 	if !msg.ACK {
 		Throw(errors.New("network stack initialization is not acknowledged"))
 	}

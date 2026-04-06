@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-
 )
 
 // will be injected during release
@@ -17,8 +16,10 @@ func main() {
 
 func buildVersion(version, commit string) string {
 	result := version
+
 	if commit != "" {
 		result = fmt.Sprintf("%s\ncommit: %s", result, commit)
 	}
+
 	return result
 }

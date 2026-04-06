@@ -28,6 +28,7 @@ func (e *Exception) AsError() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.what()
 }
 
@@ -73,6 +74,8 @@ func Try(cb func()) (err *Exception) {
 			}
 		}
 	}()
+
 	cb()
+
 	return nil
 }

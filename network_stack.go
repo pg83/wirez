@@ -69,6 +69,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 			ThrowFmt("%s", err)
 		}
 	}
+
 	throwTCPIP(s.CreateNIC(defaultNICID, ep))
 	throwTCPIP(s.SetPromiscuousMode(defaultNICID, true))
 	throwTCPIP(s.SetSpoofing(defaultNICID, true))
@@ -102,12 +103,14 @@ func (s *NetworkStack) setTCPHandler() {
 			Stringer("localAddress", id.LocalAddress).Uint16("localPort", id.LocalPort).
 			Stringer("fromAddress", id.RemoteAddress).Uint16("fromPort", id.RemotePort).Msg("received request")
 		ep, err := r.CreateEndpoint(&wq)
+
 		if err != nil {
 			s.log.Error().Str("handler", "tcp").Stringer("error", err).Msg("")
 			// prevent potential half-open TCP connection leak.
 			r.Complete(true)
 			return
 		}
+
 		r.Complete(false)
 
 		go func() {
@@ -129,10 +132,12 @@ func (s *NetworkStack) setUDPHandler() {
 			Stringer("localAddress", id.LocalAddress).Uint16("localPort", id.LocalPort).
 			Stringer("fromAddress", id.RemoteAddress).Uint16("fromPort", id.RemotePort).Msg("received request")
 		ep, err := r.CreateEndpoint(&wq)
+
 		if err != nil {
 			s.log.Error().Str("handler", "udp").Stringer("error", err).Msg("")
 			return true
 		}
+
 		go func() {
 			Try(func() {
 				s.handleUDP(gonet.NewUDPConn(&wq, ep), &id)
@@ -140,6 +145,7 @@ func (s *NetworkStack) setUDPHandler() {
 				s.log.Error().Str("handler", "udp").Err(exc).Msg("")
 			})
 		}()
+
 		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
