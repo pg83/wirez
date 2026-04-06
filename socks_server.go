@@ -67,7 +67,6 @@ func (h *serverHandler) handleConnect(localConn net.Conn, req *gosocks5.Request)
 
 	defer dstConn.Close()
 	Throw(gosocks5.NewReply(gosocks5.Succeeded, nil).Write(localConn))
-
 	localConn = NewTimeoutConn(localConn, h.tcpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, h.tcpIOTimeout)
 	Throw(h.transporter.Transport(localConn, dstConn))
@@ -81,10 +80,8 @@ func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Req
 
 	socksListenAddr := Throw2(gosocks5.NewAddr(listenConn.LocalAddr().String()))
 	Throw(gosocks5.NewReply(gosocks5.Succeeded, socksListenAddr).Write(localConn))
-
 	buf := trPool.Get().([]byte)
 	n, sourceAddr := Throw3(listenConn.ReadFromUDP(buf))
-
 	ctx, cancel := context.WithTimeout(context.Background(), h.connectTimeout)
 	defer cancel()
 	dstAddr := net.IPv4zero
@@ -96,6 +93,7 @@ func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Req
 	dstConn := Throw2(h.socksUDPConn.DialContext(ctx, "udp", dstAddr.String()+":0"))
 	dstConn = NewTimeoutConn(dstConn, h.udpIOTimeout)
 	Throw2(dstConn.Write(buf[:n]))
+
 	trPool.Put(buf) //nolint:staticcheck
 
 	localUDPConn := &firstConnectUDPConn{UDPConn: listenConn, targetAddr: sourceAddr}

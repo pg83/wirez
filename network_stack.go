@@ -83,7 +83,6 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 
 func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
 	_, ipNet := Throw3(net.ParseCIDR(assignNet))
-
 	subnet := Throw2(tcpip.NewSubnet(tcpip.AddrFrom4Slice(ipNet.IP.To4()), tcpip.MaskFromBytes(ipNet.Mask)))
 
 	rt := s.GetRouteTable()
@@ -153,33 +152,31 @@ func (s *NetworkStack) setUDPHandler() {
 
 func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) {
 	defer localConn.Close()
-
 	address := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
-
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
 	dstConn := Throw2(s.socksTCPConn.DialContext(ctx, "tcp", address))
 	defer dstConn.Close()
-
 	localConn = NewTimeoutConn(localConn, s.TcpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.TcpIOTimeout)
+
 	// relay TCP connections
 	Throw(s.transporter.Transport(localConn, dstConn))
 }
 
 func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) {
 	defer localConn.Close()
-
 	dstAddress := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
+
 	s.log.Debug().Str("dstAddr", dstAddress).Msg("handleUDP called")
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
 	dstConn := Throw2(s.socksUDPConn.DialContext(ctx, "udp", dstAddress))
 	defer dstConn.Close()
-
 	localConn = NewTimeoutConn(localConn, s.UdpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.UdpIOTimeout)
+
 	// relay UDP connections
 	Throw(s.transporter.Transport(localConn, dstConn))
 }

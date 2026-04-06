@@ -63,14 +63,15 @@ func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
 		defer trPool.Put(buf) //nolint:staticcheck
 
 		_, err := io.CopyBuffer(w, r, buf)
+
 		errc <- err
 	}
 	go copyBuf(rw1, rw2)
 	go copyBuf(rw2, rw1)
 
 	err := <-errc
-	t.log.Debug().Err(err).Msg("close connection")
 
+	t.log.Debug().Err(err).Msg("close connection")
 	var terr timeoutError
 
 	if err == io.EOF || (errors.As(err, &terr) && terr.Timeout()) {

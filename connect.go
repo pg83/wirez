@@ -72,11 +72,9 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 		dstAddr := Throw2(gosocks5.NewAddr(address))
 		conn = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
 		Throw(conn.SetDeadline(time.Now().Add(connectTimeout)))
-
 		cc := gosocks5.ClientConn(conn, c.selector)
 		Throw(cc.Handleshake())
 		conn = cc
-
 		req := gosocks5.NewRequest(gosocks5.CmdConnect, dstAddr)
 		Throw(req.Write(conn))
 		reply := Throw2(gosocks5.ReadReply(conn))
@@ -127,17 +125,16 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 	err = Try(func() {
 		dstAddr := Throw2(gosocks5.NewAddr(address))
 		dstUDPAddr := Throw2(net.ResolveUDPAddr("udp", address))
-
 		socksConn = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
 		Throw(socksConn.SetDeadline(time.Now().Add(connectTimeout)))
-
 		cc := gosocks5.ClientConn(socksConn, c.selector)
 		Throw(cc.Handleshake())
 		socksConn = cc
-
 		req := gosocks5.NewRequest(gosocks5.CmdUdp, &gosocks5.Addr{Type: dstAddr.Type})
 		Throw(req.Write(socksConn))
+
 		c.log.Debug().Str("dstAddr", address).Msg("udp cmd request write success")
+
 		reply := Throw2(gosocks5.ReadReply(socksConn))
 
 		if reply.Rep != gosocks5.Succeeded {
@@ -145,9 +142,11 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 		}
 
 		replyAddr := reply.Addr.String()
+
 		c.log.Debug().Str("dstAddr", address).Str("replyAddr", replyAddr).Msg("udp cmd reply success")
 
 		uc := Throw2(c.udpConnector.DialContext(ctx, "udp", replyAddr))
+
 		c.log.Debug().Str("local udp addr", uc.LocalAddr().String())
 
 		//nolint:errcheck
@@ -334,6 +333,7 @@ func NewAddressMapper() AddressMapper {
 func (m *addressMapper) MapAddress(network, address string) (mappedAddress string, exists bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	if mappedAddress, exists = m.nat[network][address]; exists {
 		return
 	}
@@ -346,6 +346,7 @@ func (m *addressMapper) MapAddress(network, address string) (mappedAddress strin
 func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	if _, ok := m.nat[network]; !ok {
 		m.nat[network] = make(map[string]string)
 	}

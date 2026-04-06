@@ -49,13 +49,13 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 
 				log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
 				log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
+
 				forwardProxies := parseProxyURLs(c.opts.ForwardProxies)
 				nat := parseAddressMapper(c.opts.LocalAddressMappings)
 
 				parentFd, childFd := newUnixSocketPair()
 				defer unix.Close(parentFd)
 				defer unix.Close(childFd)
-
 				privileged := os.Geteuid() == 0
 				proc := exec.Command("/proc/self/exe", append([]string{"runc",
 					"--unix-fd", strconv.Itoa(childFd), fmt.Sprintf("--privileged=%t", privileged),
@@ -84,10 +84,10 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				Throw(proc.Start())
 				parentConn := newParentUnixSocketConn(parentFd)
 				tunFd := parentConn.ReceiveFd()
-				log.Debug().Int("fd", tunFd).Msg("got tun device")
 				defer unix.Close(tunFd)
-
 				tunMTU := parentConn.ReceiveMTU()
+
+				log.Debug().Int("fd", tunFd).Msg("got tun device")
 				log.Debug().Uint32("mtu", tunMTU).Msg("")
 
 				dconn := NewDirectConnector()
@@ -108,7 +108,6 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 
 				socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
 				socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
-
 				stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
 					socksTCPConn, socksUDPConn, NewTransporter(log))
 				defer stack.Close()

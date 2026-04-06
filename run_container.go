@@ -33,16 +33,15 @@ func newRunContainerCmd() *runContainerCmd {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return Try(func() {
 				Throw(syscall.Sethostname([]byte(c.opts.Hostname)))
-
 				childConn := newChildUnixSocketConn(c.opts.PipeFd)
 				defer childConn.Close()
-
 				tunFd := Throw2(tun.Open(tunDevice))
 				defer unix.Close(tunFd)
 
 				childConn.SendFd(tunFd)
 
 				link := Throw2(netlink.LinkByName(tunDevice))
+
 				childConn.SendMTU(uint32(link.Attrs().MTU))
 
 				// wait for starting network stack
@@ -147,9 +146,7 @@ type MTUMessage struct {
 func setupIPNetwork() {
 	lo := Throw2(netlink.LinkByName(loDevice))
 	Throw(netlink.LinkSetUp(lo))
-
 	tun0, tunAddr := setupIPAddress(tunDevice, tunNetworkAddr)
-
 	Throw(netlink.RouteAdd(&netlink.Route{
 		Gw:        tunAddr.IP,
 		LinkIndex: tun0.Attrs().Index,
@@ -172,7 +169,6 @@ func setupResolvConf() {
 	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
 	Throw(os.MkdirAll(resolvConfTmpDir, 0755))
 	Throw(unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"))
-
 	tmpFile := resolvConfTmpDir + "/resolv.conf"
 	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
 
