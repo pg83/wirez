@@ -39,7 +39,11 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 			if len(c.opts.ForwardProxies) == 0 {
 				return errors.New("forward proxies list is empty")
 			}
-			log = setLogLevel(log, c.opts.VerboseLevel)
+			if c.opts.Quiet {
+				log = setLogLevel(log, -1)
+			} else {
+				log = setLogLevel(log, c.opts.VerboseLevel)
+			}
 			log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
 			log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
 			forwardProxies, err := parseProxyURLs(c.opts.ForwardProxies)
@@ -146,6 +150,7 @@ type runCmdOpts struct {
 	ForwardProxies       []string
 	LocalAddressMappings []string
 	VerboseLevel         int
+	Quiet                bool
 	ContainerUID         int
 	ContainerGID         int
 }
@@ -158,6 +163,8 @@ func (o *runCmdOpts) initCliFlags(cmd *cobra.Command) {
 	cmd.Flags().CountVarP(&o.VerboseLevel, "verbose", "v", "log verbose level")
 	verboseFlag := cmd.Flags().Lookup("verbose")
 	verboseFlag.Value = &renamedTypeFlagValue{Value: verboseFlag.Value}
+
+	cmd.Flags().BoolVarP(&o.Quiet, "quiet", "q", false, "suppress all log output")
 
 	cmd.Flags().StringArrayVarP(&o.LocalAddressMappings, "local", "L", nil, "specifies that connections to the target host and TCP/UDP port are to be directly forwarded to the given host and port")
 	localFlag := cmd.Flags().Lookup("local")
