@@ -73,11 +73,11 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 
 			if privileged {
 				proc.SysProcAttr = &syscall.SysProcAttr{
-					Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET,
+					Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
 				}
 			} else {
 				proc.SysProcAttr = &syscall.SysProcAttr{
-					Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER,
+					Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
 					Credential: &syscall.Credential{Uid: 0, Gid: uint32(c.opts.ContainerGID)},
 					UidMappings: []syscall.SysProcIDMap{
 						{ContainerID: 0, HostID: os.Geteuid(), Size: 1},

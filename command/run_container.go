@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"syscall"
@@ -64,6 +65,10 @@ func newRunContainerCmd() *runContainerCmd {
 			}
 
 			if err = setupIPNetwork(); err != nil {
+				return err
+			}
+
+			if err = setupResolvConf(); err != nil {
 				return err
 			}
 
@@ -183,6 +188,40 @@ func setupIPNetwork() error {
 		Gw:        tunAddr.IP,
 		LinkIndex: tun0.Attrs().Index,
 	})
+}
+
+const resolvConfTmpDir = "/tmp/.wirez-resolv"
+
+func setupResolvConf() error {
+	// Prevent mount propagation to the host.
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make root private: %w", err)
+	}
+	// Parse TUN IP and use next IP in subnet as nameserver,
+	// because the TUN IP itself is a local address and packets to it
+	// don't traverse the TUN device.
+	ip, _, err := net.ParseCIDR(tunNetworkAddr)
+	if err != nil {
+		return err
+	}
+	ip = ip.To4()
+	ip[3]++
+	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
+	if err := os.MkdirAll(resolvConfTmpDir, 0755); err != nil {
+		return err
+	}
+	if err := unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"); err != nil {
+		return fmt.Errorf("mount tmpfs: %w", err)
+	}
+	tmpFile := resolvConfTmpDir + "/resolv.conf"
+	if err := os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644); err != nil {
+		return err
+	}
+	// Bind mount over /etc/resolv.conf.
+	if err := unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind mount resolv.conf: %w", err)
+	}
+	return nil
 }
 
 func setupIPAddress(device, networkAddr string) (dev netlink.Link, addr *netlink.Addr, err error) {
