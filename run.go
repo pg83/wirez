@@ -56,10 +56,13 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				parentFd, childFd := newUnixSocketPair()
 				defer unix.Close(parentFd)
 				defer unix.Close(childFd)
+
 				privileged := os.Geteuid() == 0
+
 				proc := exec.Command("/proc/self/exe", append([]string{"runc",
 					"--unix-fd", strconv.Itoa(childFd), fmt.Sprintf("--privileged=%t", privileged),
 					"--uid", strconv.Itoa(c.opts.ContainerUID), "--gid", strconv.Itoa(c.opts.ContainerGID), "--"}, args...)...)
+
 				proc.Stdin = os.Stdin
 				proc.Stdout = os.Stdout
 				proc.Stderr = os.Stderr
@@ -94,6 +97,7 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				log.Debug().Uint32("mtu", tunMTU).Msg("")
 
 				dconn := NewDirectConnector()
+
 				socksTCPConn := dconn
 				socksTCPConns := make([]Connector, 0, len(c.opts.ForwardProxies)+1)
 				socksTCPConns = append(socksTCPConns, dconn)
@@ -173,6 +177,7 @@ func newUnixSocketPair() (parentFd, childFd int) {
 	if err != nil {
 		err = multierr.Append(err, unix.Close(parentFd))
 		err = multierr.Append(err, unix.Close(childFd))
+
 		Throw(err)
 	}
 
@@ -214,7 +219,9 @@ func (c *parentUnixSocketConn) ReceiveFd() int {
 
 func (c *parentUnixSocketConn) ReceiveMTU() uint32 {
 	var msg MTUMessage
+
 	Throw(json.NewDecoder(c.socketFile).Decode(&msg))
+
 	return msg.MTU
 }
 

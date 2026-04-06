@@ -70,13 +70,18 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 
 	err = Try(func() {
 		dstAddr := Throw2(gosocks5.NewAddr(address))
+
 		conn = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
 		Throw(conn.SetDeadline(time.Now().Add(connectTimeout)))
+
 		cc := gosocks5.ClientConn(conn, c.selector)
 		Throw(cc.Handleshake())
+
 		conn = cc
 		req := gosocks5.NewRequest(gosocks5.CmdConnect, dstAddr)
+
 		Throw(req.Write(conn))
+
 		reply := Throw2(gosocks5.ReadReply(conn))
 
 		if reply.Rep != gosocks5.Succeeded {
@@ -124,13 +129,19 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 
 	err = Try(func() {
 		dstAddr := Throw2(gosocks5.NewAddr(address))
+
 		dstUDPAddr := Throw2(net.ResolveUDPAddr("udp", address))
+
 		socksConn = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
+
 		Throw(socksConn.SetDeadline(time.Now().Add(connectTimeout)))
+
 		cc := gosocks5.ClientConn(socksConn, c.selector)
 		Throw(cc.Handleshake())
+
 		socksConn = cc
 		req := gosocks5.NewRequest(gosocks5.CmdUdp, &gosocks5.Addr{Type: dstAddr.Type})
+
 		Throw(req.Write(socksConn))
 
 		c.log.Debug().Str("dstAddr", address).Msg("udp cmd request write success")
