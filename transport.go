@@ -66,6 +66,7 @@ func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
 
 		errc <- err
 	}
+
 	go copyBuf(rw1, rw2)
 	go copyBuf(rw2, rw1)
 

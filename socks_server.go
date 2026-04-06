@@ -43,6 +43,7 @@ func (h *serverHandler) Handle(conn net.Conn) (err error) {
 	return Try(func() {
 		conn = gosocks5.ServerConn(conn, h.selector)
 		defer conn.Close()
+
 		req := Throw2(gosocks5.ReadRequest(conn))
 
 		switch req.Cmd {
@@ -80,10 +81,13 @@ func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Req
 
 	socksListenAddr := Throw2(gosocks5.NewAddr(listenConn.LocalAddr().String()))
 	Throw(gosocks5.NewReply(gosocks5.Succeeded, socksListenAddr).Write(localConn))
+
 	buf := trPool.Get().([]byte)
 	n, sourceAddr := Throw3(listenConn.ReadFromUDP(buf))
+
 	ctx, cancel := context.WithTimeout(context.Background(), h.connectTimeout)
 	defer cancel()
+
 	dstAddr := net.IPv4zero
 
 	if req.Addr.Type == gosocks5.AddrIPv6 {

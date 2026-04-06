@@ -175,8 +175,10 @@ func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpoint
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
+
 	dstConn := Throw2(s.socksUDPConn.DialContext(ctx, "udp", dstAddress))
 	defer dstConn.Close()
+
 	localConn = NewTimeoutConn(localConn, s.UdpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.UdpIOTimeout)
 

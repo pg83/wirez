@@ -170,7 +170,9 @@ func setupResolvConf() {
 	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
 	Throw(os.MkdirAll(resolvConfTmpDir, 0755))
 	Throw(unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"))
+
 	tmpFile := resolvConfTmpDir + "/resolv.conf"
+
 	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
 
 	// Bind mount over /etc/resolv.conf.
@@ -180,7 +182,9 @@ func setupResolvConf() {
 func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {
 	dev := Throw2(netlink.LinkByName(device))
 	Throw(netlink.LinkSetUp(dev))
+
 	addr := Throw2(netlink.ParseAddr(networkAddr))
 	Throw(netlink.AddrAdd(dev, addr))
+
 	return dev, addr
 }

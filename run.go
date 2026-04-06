@@ -82,9 +82,12 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				}
 
 				Throw(proc.Start())
+
 				parentConn := newParentUnixSocketConn(parentFd)
+
 				tunFd := parentConn.ReceiveFd()
 				defer unix.Close(tunFd)
+
 				tunMTU := parentConn.ReceiveMTU()
 
 				log.Debug().Int("fd", tunFd).Msg("got tun device")
@@ -108,8 +111,8 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 
 				socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
 				socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
-				stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
-					socksTCPConn, socksUDPConn, NewTransporter(log))
+
+				stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, socksTCPConn, socksUDPConn, NewTransporter(log))
 				defer stack.Close()
 
 				parentConn.SendACK()

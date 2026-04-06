@@ -52,11 +52,13 @@ func Throw(err error) {
 
 func Throw2[T any](val T, err error) T {
 	Throw(err)
+
 	return val
 }
 
 func Throw3[T1, T2 any](v1 T1, v2 T2, err error) (T1, T2) {
 	Throw(err)
+
 	return v1, v2
 }
 

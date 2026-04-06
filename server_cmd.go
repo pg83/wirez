@@ -24,11 +24,13 @@ func newServerCmd(log *zerolog.Logger) *serverCmd {
 			return Try(func() {
 				f := Throw2(os.Open(c.opts.proxyFile))
 				defer f.Close()
+
 				socksAddrs := parseProxyFile(f)
 
 				log.Info().Msgf("starting listening on %s...", c.opts.listenAddr)
 
 				ln := Throw2(net.Listen("tcp", c.opts.listenAddr))
+
 				srv := &server.Server{
 					Listener: ln,
 				}
