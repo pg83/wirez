@@ -2,7 +2,6 @@ package command
 
 import (
 	"bufio"
-	"errors"
 	"io"
 	"net"
 	"net/url"
@@ -66,25 +65,13 @@ func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 	} else {
 		network = parts[1]
 	}
-	targetPort, rest, err := takeLastPort(parts[0])
-	if err != nil {
-		throw.ThrowFmt("invalid target port in mapping %s: %w", mapping, err)
-	}
-	targetHost, rest, err := takeLastHost(rest)
-	if err != nil {
-		throw.ThrowFmt("invalid target host in mapping %s: %w", mapping, err)
-	}
+	targetPort, rest := takeLastPort(parts[0])
+	targetHost, rest := takeLastHost(rest)
 	if len(targetHost) == 0 {
 		throw.ThrowFmt("empty target host in mapping %s", mapping)
 	}
-	fromPort, rest, err := takeLastPort(rest)
-	if err != nil {
-		throw.ThrowFmt("invalid source port in mapping %s: %w", mapping, err)
-	}
-	fromHost, rest, err := takeLastHost(rest)
-	if err != nil {
-		throw.ThrowFmt("invalid source host in mapping %s: %w", mapping, err)
-	}
+	fromPort, rest := takeLastPort(rest)
+	fromHost, rest := takeLastHost(rest)
 	if len(rest) > 0 {
 		throw.ThrowFmt("invalid source address in mapping %s", mapping)
 	}
@@ -93,7 +80,7 @@ func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 	return
 }
 
-func takeLastHost(input string) (host, rest string, err error) {
+func takeLastHost(input string) (host, rest string) {
 	if len(input) == 0 {
 		return
 	}
@@ -105,34 +92,34 @@ func takeLastHost(input string) (host, rest string, err error) {
 	if idx > 0 {
 		rest = input[:idx]
 	}
-	return host, rest, err
+	return
 }
 
-func takeLastIPv6Host(input string) (host, rest string, err error) {
+func takeLastIPv6Host(input string) (host, rest string) {
 	idx := strings.LastIndex(input, "[")
 	if idx == -1 {
-		return "", "", errors.New("invalid IPv6 address")
+		throw.ThrowFmt("invalid IPv6 address")
 	}
 	host = input[idx+1 : len(input)-1]
 	if idx > 0 {
 		if input[idx-1] != ':' {
-			return "", "", errors.New("missing colon before host")
+			throw.ThrowFmt("missing colon before host")
 		}
 		rest = input[:idx-1]
 	}
 	if ip := net.ParseIP(host); ip == nil {
-		err = errors.New("invalid IPv6 address")
+		throw.ThrowFmt("invalid IPv6 address")
 	}
-	return host, rest, err
+	return
 }
 
-func takeLastPort(input string) (port, rest string, err error) {
+func takeLastPort(input string) (port, rest string) {
 	idx := strings.LastIndex(input, ":")
 	port = input[idx+1:]
 	if idx > 0 {
 		rest = input[:idx]
 	}
-	_, err = strconv.ParseUint(port, 10, 16)
+	throw.Throw2(strconv.ParseUint(port, 10, 16))
 	return
 }
 

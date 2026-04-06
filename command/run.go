@@ -4,7 +4,6 @@ package command
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,21 +30,21 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 		Short: "Proxy application traffic through the socks5 server",
 		Long:  "Run a command in an unprivileged container that transparently proxies application traffic through the socks5 server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if c.opts.ContainerUID < 0 {
-				return errors.New("uid is negative")
-			}
-			if c.opts.ContainerGID < 0 {
-				return errors.New("gid is negative")
-			}
-			if len(c.opts.ForwardProxies) == 0 {
-				return errors.New("forward proxies list is empty")
-			}
-			if c.opts.Quiet {
-				log = setLogLevel(log, -1)
-			} else {
-				log = setLogLevel(log, c.opts.VerboseLevel)
-			}
 			return throw.Try(func() {
+				if c.opts.ContainerUID < 0 {
+					throw.ThrowFmt("uid is negative")
+				}
+				if c.opts.ContainerGID < 0 {
+					throw.ThrowFmt("gid is negative")
+				}
+				if len(c.opts.ForwardProxies) == 0 {
+					throw.ThrowFmt("forward proxies list is empty")
+				}
+				if c.opts.Quiet {
+					log = setLogLevel(log, -1)
+				} else {
+					log = setLogLevel(log, c.opts.VerboseLevel)
+				}
 				log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
 				log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
 				forwardProxies := parseProxyURLs(c.opts.ForwardProxies)
@@ -192,14 +191,10 @@ func (c *parentUnixSocketConn) ReceiveFd() int {
 	throw.Throw(err)
 
 	// parse socket control message
-	cmsgs, err := unix.ParseSocketControlMessage(b)
-	if err != nil {
-		throw.ThrowFmt("parse socket control message: %w", err)
-	}
-
+	cmsgs := throw.Throw2(unix.ParseSocketControlMessage(b))
 	tunFds := throw.Throw2(unix.ParseUnixRights(&cmsgs[0]))
 	if len(tunFds) == 0 {
-		throw.Throw(errors.New("tun fds slice is empty"))
+		throw.ThrowFmt("tun fds slice is empty")
 	}
 	return tunFds[0]
 }

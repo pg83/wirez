@@ -3,7 +3,6 @@ package connect
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +17,7 @@ import (
 	"github.com/ginuerzh/gosocks5/client"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"go.uber.org/multierr"
 )
 
@@ -66,37 +66,24 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 	if network != "tcp" {
 		return nil, fmt.Errorf("network %s is not supported", network)
 	}
-	dstAddr, err := gosocks5.NewAddr(address)
-	if err != nil {
-		return
-	}
+	err = throw.Try(func() {
+		dstAddr := throw.Throw2(gosocks5.NewAddr(address))
+		conn = throw.Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
+		throw.Throw(conn.SetDeadline(time.Now().Add(connectTimeout)))
 
-	if conn, err = c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress); err != nil {
-		return
-	}
-	if err = conn.SetDeadline(time.Now().Add(connectTimeout)); err != nil {
-		return
-	}
-	defer func() {
+		cc := gosocks5.ClientConn(conn, c.selector)
+		throw.Throw(cc.Handleshake())
+		conn = cc
+
+		req := gosocks5.NewRequest(gosocks5.CmdConnect, dstAddr)
+		throw.Throw(req.Write(conn))
+		reply := throw.Throw2(gosocks5.ReadReply(conn))
+		if reply.Rep != gosocks5.Succeeded {
+			throw.ThrowFmt("destination address [%s] is unavailable", dstAddr)
+		}
+	}).AsError()
+	if conn != nil {
 		err = multierr.Append(err, conn.SetDeadline(time.Time{}))
-	}()
-
-	cc := gosocks5.ClientConn(conn, c.selector)
-	if err = cc.Handleshake(); err != nil {
-		return
-	}
-	conn = cc
-
-	req := gosocks5.NewRequest(gosocks5.CmdConnect, dstAddr)
-	if err = req.Write(conn); err != nil {
-		return
-	}
-	reply, err := gosocks5.ReadReply(conn)
-	if err != nil {
-		return
-	}
-	if reply.Rep != gosocks5.Succeeded {
-		return conn, fmt.Errorf("destination address [%s] is unavailable", dstAddr)
 	}
 	return
 }
@@ -123,74 +110,56 @@ type socks5UDPConnector struct {
 	socksAddress string
 }
 
-func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (_ net.Conn, err error) {
+func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (result net.Conn, err error) {
 	if network != "udp" {
 		return nil, fmt.Errorf("network %s is not supported", network)
 	}
-	dstAddr, err := gosocks5.NewAddr(address)
-	if err != nil {
-		return
-	}
-	dstUDPAddr, err := net.ResolveUDPAddr("udp", address)
-	if err != nil {
-		return
-	}
+	var socksConn net.Conn
+	err = throw.Try(func() {
+		dstAddr := throw.Throw2(gosocks5.NewAddr(address))
+		dstUDPAddr := throw.Throw2(net.ResolveUDPAddr("udp", address))
 
-	socksConn, err := c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = multierr.Append(err, socksConn.Close())
+		socksConn = throw.Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
+		throw.Throw(socksConn.SetDeadline(time.Now().Add(connectTimeout)))
+
+		cc := gosocks5.ClientConn(socksConn, c.selector)
+		throw.Throw(cc.Handleshake())
+		socksConn = cc
+
+		req := gosocks5.NewRequest(gosocks5.CmdUdp, &gosocks5.Addr{Type: dstAddr.Type})
+		throw.Throw(req.Write(socksConn))
+		c.log.Debug().Str("dstAddr", address).Msg("udp cmd request write success")
+		reply := throw.Throw2(gosocks5.ReadReply(socksConn))
+		if reply.Rep != gosocks5.Succeeded {
+			throw.ThrowFmt("service unavailable")
 		}
-	}()
-	if err = socksConn.SetDeadline(time.Now().Add(connectTimeout)); err != nil {
-		return
-	}
-	defer func() {
+		replyAddr := reply.Addr.String()
+		c.log.Debug().Str("dstAddr", address).Str("replyAddr", replyAddr).Msg("udp cmd reply success")
+
+		uc := throw.Throw2(c.udpConnector.DialContext(ctx, "udp", replyAddr))
+		c.log.Debug().Str("local udp addr", uc.LocalAddr().String())
+		//nolint:errcheck
+		go func() {
+			io.Copy(io.Discard, socksConn)
+			socksConn.Close()
+			// A UDP association terminates when the TCP connection that the UDP
+			// ASSOCIATE request arrived on terminates. RFC1928
+			uc.Close()
+		}()
+
+		if dstUDPAddr.IP.IsUnspecified() {
+			result = newSocksRawUDPConn(uc, socksConn)
+		} else {
+			result = newSocksUDPConn(uc, socksConn, dstUDPAddr)
+		}
+	}).AsError()
+	if socksConn != nil {
 		err = multierr.Append(err, socksConn.SetDeadline(time.Time{}))
-	}()
-
-	cc := gosocks5.ClientConn(socksConn, c.selector)
-	if err = cc.Handleshake(); err != nil {
-		return
 	}
-	socksConn = cc
-
-	req := gosocks5.NewRequest(gosocks5.CmdUdp, &gosocks5.Addr{Type: dstAddr.Type})
-	if err = req.Write(socksConn); err != nil {
-		return
+	if err != nil && socksConn != nil {
+		err = multierr.Append(err, socksConn.Close())
 	}
-	c.log.Debug().Str("dstAddr", address).Msg("udp cmd request write success")
-	reply, err := gosocks5.ReadReply(socksConn)
-	if err != nil {
-		return
-	}
-	if reply.Rep != gosocks5.Succeeded {
-		return nil, errors.New("service unavailable")
-	}
-	replyAddr := reply.Addr.String()
-	c.log.Debug().Str("dstAddr", address).Str("replyAddr", replyAddr).Msg("udp cmd reply success")
-
-	uc, err := c.udpConnector.DialContext(ctx, "udp", replyAddr)
-	if err != nil {
-		return
-	}
-	c.log.Debug().Str("local udp addr", uc.LocalAddr().String())
-	//nolint:errcheck
-	go func() {
-		io.Copy(io.Discard, socksConn)
-		socksConn.Close()
-		// A UDP association terminates when the TCP connection that the UDP
-		// ASSOCIATE request arrived on terminates. RFC1928
-		uc.Close()
-	}()
-
-	if dstUDPAddr.IP.IsUnspecified() {
-		return newSocksRawUDPConn(uc, socksConn), nil
-	}
-	return newSocksUDPConn(uc, socksConn, dstUDPAddr), nil
+	return
 }
 
 func newSocksRawUDPConn(udpConn net.Conn, tcpConn net.Conn) *socksRawUDPConn {

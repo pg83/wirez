@@ -4,7 +4,6 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -66,15 +65,14 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 	}))
 
 	var defaultNICID tcpip.NICID = 0x01
-	if err := s.CreateNIC(defaultNICID, ep); err != nil {
-		return nil, errors.New(err.String())
+	throwTCPIP := func(err *tcpip.Error) {
+		if err != nil {
+			throw.ThrowFmt("%s", err)
+		}
 	}
-	if err := s.SetPromiscuousMode(defaultNICID, true); err != nil {
-		return nil, errors.New(err.String())
-	}
-	if err := s.SetSpoofing(defaultNICID, true); err != nil {
-		return nil, errors.New(err.String())
-	}
+	throwTCPIP(s.CreateNIC(defaultNICID, ep))
+	throwTCPIP(s.SetPromiscuousMode(defaultNICID, true))
+	throwTCPIP(s.SetSpoofing(defaultNICID, true))
 
 	s.setupRouting(defaultNICID, tunNetworkAddr)
 
