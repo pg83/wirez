@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 
-	"github.com/v-byte-cpu/wirez/command"
 )
 
 // will be injected during release
@@ -13,7 +12,7 @@ var (
 )
 
 func main() {
-	command.Main(buildVersion(version, commit))
+	Main(buildVersion(version, commit))
 }
 
 func buildVersion(version, commit string) string {

@@ -1,6 +1,6 @@
 //go:build linux
 
-package command
+package main
 
 import (
 	"encoding/json"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/vishvananda/netlink"
-	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip/link/tun"
 )
@@ -32,18 +31,18 @@ func newRunContainerCmd() *runContainerCmd {
 		Short:   "Internal command to run a new process inside an isolated container",
 		Hidden:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return throw.Try(func() {
-				throw.Throw(syscall.Sethostname([]byte(c.opts.Hostname)))
+			return Try(func() {
+				Throw(syscall.Sethostname([]byte(c.opts.Hostname)))
 
 				childConn := newChildUnixSocketConn(c.opts.PipeFd)
 				defer childConn.Close()
 
-				tunFd := throw.Throw2(tun.Open(tunDevice))
+				tunFd := Throw2(tun.Open(tunDevice))
 				defer unix.Close(tunFd)
 
 				childConn.SendFd(tunFd)
 
-				link := throw.Throw2(netlink.LinkByName(tunDevice))
+				link := Throw2(netlink.LinkByName(tunDevice))
 				childConn.SendMTU(uint32(link.Attrs().MTU))
 
 				// wait for starting network stack
@@ -74,7 +73,7 @@ func newRunContainerCmd() *runContainerCmd {
 					}
 				}
 
-				throw.Throw(proc.Run())
+				Throw(proc.Run())
 			}).AsError()
 		},
 	}
@@ -124,19 +123,19 @@ func (c *childUnixSocketConn) Close() error {
 
 func (c *childUnixSocketConn) SendFd(fd int) {
 	rights := unix.UnixRights(fd)
-	throw.Throw(unix.Sendmsg(c.socketFd, nil, rights, nil, 0))
+	Throw(unix.Sendmsg(c.socketFd, nil, rights, nil, 0))
 }
 
 func (c *childUnixSocketConn) SendMTU(mtu uint32) {
-	data := throw.Throw2(json.Marshal(&MTUMessage{MTU: mtu}))
-	throw.Throw2(c.socketFile.Write(data))
+	data := Throw2(json.Marshal(&MTUMessage{MTU: mtu}))
+	Throw2(c.socketFile.Write(data))
 }
 
 func (c *childUnixSocketConn) ReceiveACK() {
 	var msg ACKMessage
-	throw.Throw(json.NewDecoder(c.socketFile).Decode(&msg))
+	Throw(json.NewDecoder(c.socketFile).Decode(&msg))
 	if !msg.ACK {
-		throw.Throw(errors.New("network stack initialization is not acknowledged"))
+		Throw(errors.New("network stack initialization is not acknowledged"))
 	}
 }
 
@@ -145,12 +144,12 @@ type MTUMessage struct {
 }
 
 func setupIPNetwork() {
-	lo := throw.Throw2(netlink.LinkByName(loDevice))
-	throw.Throw(netlink.LinkSetUp(lo))
+	lo := Throw2(netlink.LinkByName(loDevice))
+	Throw(netlink.LinkSetUp(lo))
 
 	tun0, tunAddr := setupIPAddress(tunDevice, tunNetworkAddr)
 
-	throw.Throw(netlink.RouteAdd(&netlink.Route{
+	Throw(netlink.RouteAdd(&netlink.Route{
 		Gw:        tunAddr.IP,
 		LinkIndex: tun0.Attrs().Index,
 	}))
@@ -160,30 +159,30 @@ const resolvConfTmpDir = "/tmp/.wirez-resolv"
 
 func setupResolvConf() {
 	// Prevent mount propagation to the host.
-	throw.Throw(unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""))
+	Throw(unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""))
 
 	// Parse TUN IP and use next IP in subnet as nameserver,
 	// because the TUN IP itself is a local address and packets to it
 	// don't traverse the TUN device.
-	ip, _ := throw.Throw3(net.ParseCIDR(tunNetworkAddr))
+	ip, _ := Throw3(net.ParseCIDR(tunNetworkAddr))
 	ip = ip.To4()
 	ip[3]++
 
 	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
-	throw.Throw(os.MkdirAll(resolvConfTmpDir, 0755))
-	throw.Throw(unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"))
+	Throw(os.MkdirAll(resolvConfTmpDir, 0755))
+	Throw(unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"))
 
 	tmpFile := resolvConfTmpDir + "/resolv.conf"
-	throw.Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
+	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
 
 	// Bind mount over /etc/resolv.conf.
-	throw.Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
+	Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
 }
 
 func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {
-	dev := throw.Throw2(netlink.LinkByName(device))
-	throw.Throw(netlink.LinkSetUp(dev))
-	addr := throw.Throw2(netlink.ParseAddr(networkAddr))
-	throw.Throw(netlink.AddrAdd(dev, addr))
+	dev := Throw2(netlink.LinkByName(device))
+	Throw(netlink.LinkSetUp(dev))
+	addr := Throw2(netlink.ParseAddr(networkAddr))
+	Throw(netlink.AddrAdd(dev, addr))
 	return dev, addr
 }

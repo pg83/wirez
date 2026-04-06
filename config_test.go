@@ -1,4 +1,4 @@
-package command
+package main
 
 import (
 	"net/url"
@@ -6,19 +6,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/v-byte-cpu/wirez/pkg/connect"
-	"github.com/v-byte-cpu/wirez/pkg/throw"
 )
 
 func tryErr(fn func()) error {
-	return throw.Try(fn).AsError()
+	return Try(fn).AsError()
 }
 
 func TestParseProxyURL(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		expected    *connect.SocksAddr
+		expected    *SocksAddr
 		expectedErr bool
 	}{
 		{
@@ -39,37 +37,37 @@ func TestParseProxyURL(t *testing.T) {
 		{
 			name:     "OneIPPort",
 			input:    "10.10.10.10:1111",
-			expected: &connect.SocksAddr{Address: "10.10.10.10:1111"},
+			expected: &SocksAddr{Address: "10.10.10.10:1111"},
 		},
 		{
 			name:     "OneIPPortWithSpaces",
 			input:    "  10.10.10.10:1111   ",
-			expected: &connect.SocksAddr{Address: "10.10.10.10:1111"},
+			expected: &SocksAddr{Address: "10.10.10.10:1111"},
 		},
 		{
 			name:     "OneHostPort",
 			input:    "example.com:1111",
-			expected: &connect.SocksAddr{Address: "example.com:1111"},
+			expected: &SocksAddr{Address: "example.com:1111"},
 		},
 		{
 			name:     "OneIPPortWithUsername",
 			input:    "abc@10.10.10.10:1111",
-			expected: &connect.SocksAddr{Address: "10.10.10.10:1111", Auth: url.User("abc")},
+			expected: &SocksAddr{Address: "10.10.10.10:1111", Auth: url.User("abc")},
 		},
 		{
 			name:     "OneIPPortWithUsernamePassword",
 			input:    "abc:def@10.10.10.10:1111",
-			expected: &connect.SocksAddr{Address: "10.10.10.10:1111", Auth: url.UserPassword("abc", "def")},
+			expected: &SocksAddr{Address: "10.10.10.10:1111", Auth: url.UserPassword("abc", "def")},
 		},
 		{
 			name:     "OneHostPortWithUsernamePassword",
 			input:    "abc:def@example.com:1111",
-			expected: &connect.SocksAddr{Address: "example.com:1111", Auth: url.UserPassword("abc", "def")},
+			expected: &SocksAddr{Address: "example.com:1111", Auth: url.UserPassword("abc", "def")},
 		},
 		{
 			name:     "WithSocks5Scheme",
 			input:    "socks5://10.10.10.10:1111",
-			expected: &connect.SocksAddr{Address: "10.10.10.10:1111"},
+			expected: &SocksAddr{Address: "10.10.10.10:1111"},
 		},
 		{
 			name:        "WithInvalidScheme",
@@ -99,7 +97,7 @@ func TestParseProxyURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var socksAddr *connect.SocksAddr
+			var socksAddr *SocksAddr
 			err := tryErr(func() {
 				socksAddr = parseProxyURL(tt.input)
 			})
@@ -117,18 +115,18 @@ func TestParseProxyURLs(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       []string
-		expected    []*connect.SocksAddr
+		expected    []*SocksAddr
 		expectedErr bool
 	}{
 		{
 			name:     "OneAddress",
 			input:    []string{"10.10.10.10:1111"},
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}},
 		},
 		{
 			name:     "TwoAddresses",
 			input:    []string{"10.10.10.10:1111", "socks5://20.20.20.20:2221"},
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}, {Address: "20.20.20.20:2221"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}, {Address: "20.20.20.20:2221"}},
 		},
 		{
 			name:        "Error",
@@ -138,7 +136,7 @@ func TestParseProxyURLs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var socksAddrs []*connect.SocksAddr
+			var socksAddrs []*SocksAddr
 			err := tryErr(func() {
 				socksAddrs = parseProxyURLs(tt.input)
 			})
@@ -156,7 +154,7 @@ func TestParseProxyFile(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		expected    []*connect.SocksAddr
+		expected    []*SocksAddr
 		expectedErr bool
 	}{
 		{
@@ -190,52 +188,52 @@ func TestParseProxyFile(t *testing.T) {
 		{
 			name:     "OneIPPort",
 			input:    "10.10.10.10:1111",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}},
 		},
 		{
 			name:     "OneIPPortWithSpaces",
 			input:    "  10.10.10.10:1111   ",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}},
 		},
 		{
 			name:     "OneHostPort",
 			input:    "example.com:1111",
-			expected: []*connect.SocksAddr{{Address: "example.com:1111"}},
+			expected: []*SocksAddr{{Address: "example.com:1111"}},
 		},
 		{
 			name:     "TwoIPPortLines",
 			input:    "10.10.10.10:1111\n20.20.20.20:2222",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}, {Address: "20.20.20.20:2222"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}, {Address: "20.20.20.20:2222"}},
 		},
 		{
 			name:     "TwoHostPortLines",
 			input:    "example.com:1111\nexample.org:2222",
-			expected: []*connect.SocksAddr{{Address: "example.com:1111"}, {Address: "example.org:2222"}},
+			expected: []*SocksAddr{{Address: "example.com:1111"}, {Address: "example.org:2222"}},
 		},
 		{
 			name:     "OneIPPortWithUsername",
 			input:    "abc@10.10.10.10:1111",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111", Auth: url.User("abc")}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111", Auth: url.User("abc")}},
 		},
 		{
 			name:     "OneIPPortWithUsernamePassword",
 			input:    "abc:def@10.10.10.10:1111",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111", Auth: url.UserPassword("abc", "def")}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111", Auth: url.UserPassword("abc", "def")}},
 		},
 		{
 			name:     "OneHostPortWithUsernamePassword",
 			input:    "abc:def@example.com:1111",
-			expected: []*connect.SocksAddr{{Address: "example.com:1111", Auth: url.UserPassword("abc", "def")}},
+			expected: []*SocksAddr{{Address: "example.com:1111", Auth: url.UserPassword("abc", "def")}},
 		},
 		{
 			name:     "WithSocks5Scheme",
 			input:    "socks5://10.10.10.10:1111",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}},
 		},
 		{
 			name:     "TwoWithSocks5Schemes",
 			input:    "socks5://10.10.10.10:1111\nsocks5://20.20.20.20:2221",
-			expected: []*connect.SocksAddr{{Address: "10.10.10.10:1111"}, {Address: "20.20.20.20:2221"}},
+			expected: []*SocksAddr{{Address: "10.10.10.10:1111"}, {Address: "20.20.20.20:2221"}},
 		},
 		{
 			name:        "WithInvalidScheme",
@@ -275,7 +273,7 @@ func TestParseProxyFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var socksAddrs []*connect.SocksAddr
+			var socksAddrs []*SocksAddr
 			err := tryErr(func() {
 				socksAddrs = parseProxyFile(strings.NewReader(tt.input))
 			})
@@ -402,7 +400,7 @@ func TestParseMapping(t *testing.T) {
 
 func TestParseAddressMapper(t *testing.T) {
 	t.Run("EmptyMapper", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper(nil)
 		})
@@ -411,7 +409,7 @@ func TestParseAddressMapper(t *testing.T) {
 		require.False(t, exists)
 	})
 	t.Run("OneFullUDPMapping", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper([]string{"8.8.8.8:53:127.0.0.1:5341/udp"})
 		})
@@ -421,7 +419,7 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Equal(t, "127.0.0.1:5341", targetAddress)
 	})
 	t.Run("OneFullTCPMapping", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/tcp"})
 		})
@@ -431,7 +429,7 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Equal(t, "127.0.0.1:5341", targetAddress)
 	})
 	t.Run("OnePortUDPMapping", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper([]string{"53:127.0.0.1:5341/udp"})
 		})
@@ -447,7 +445,7 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Error(t, err)
 	})
 	t.Run("TwoFullAddressMappings", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/udp", "2.2.2.2:53:1.1.1.1:5341/udp"})
 		})
@@ -460,7 +458,7 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Equal(t, "1.1.1.1:5341", targetAddress)
 	})
 	t.Run("TwoFullUDPAndTCPSameAddressMappings", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper([]string{"1.1.1.1:53:127.0.0.1:5341/udp", "1.1.1.1:53:8.8.8.8:1234/tcp"})
 		})
@@ -479,7 +477,7 @@ func TestParseAddressMapper(t *testing.T) {
 		require.Error(t, err)
 	})
 	t.Run("TwoPortMappings", func(t *testing.T) {
-		var m connect.AddressMapper
+		var m AddressMapper
 		err := tryErr(func() {
 			m = parseAddressMapper([]string{"53:127.0.0.1:5341/udp", "8080:127.0.0.1:4444/udp"})
 		})

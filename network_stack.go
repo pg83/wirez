@@ -1,6 +1,6 @@
 //go:build linux
 
-package connect
+package main
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -57,7 +56,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 		}),
 	}
 
-	ep := throw.Throw2(fdbased.New(&fdbased.Options{
+	ep := Throw2(fdbased.New(&fdbased.Options{
 		MTU: mtu,
 		FDs: []int{fd},
 		// TUN only
@@ -67,7 +66,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 	var defaultNICID tcpip.NICID = 0x01
 	throwTCPIP := func(err tcpip.Error) {
 		if err != nil {
-			throw.ThrowFmt("%s", err)
+			ThrowFmt("%s", err)
 		}
 	}
 	throwTCPIP(s.CreateNIC(defaultNICID, ep))
@@ -82,9 +81,9 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 }
 
 func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
-	_, ipNet := throw.Throw3(net.ParseCIDR(assignNet))
+	_, ipNet := Throw3(net.ParseCIDR(assignNet))
 
-	subnet := throw.Throw2(tcpip.NewSubnet(tcpip.AddrFrom4Slice(ipNet.IP.To4()), tcpip.MaskFromBytes(ipNet.Mask)))
+	subnet := Throw2(tcpip.NewSubnet(tcpip.AddrFrom4Slice(ipNet.IP.To4()), tcpip.MaskFromBytes(ipNet.Mask)))
 
 	rt := s.GetRouteTable()
 	rt = append(rt, tcpip.Route{
@@ -112,9 +111,9 @@ func (s *NetworkStack) setTCPHandler() {
 		r.Complete(false)
 
 		go func() {
-			throw.Try(func() {
+			Try(func() {
 				s.handleTCP(gonet.NewTCPConn(&wq, ep), &id)
-			}).Catch(func(exc *throw.Exception) {
+			}).Catch(func(exc *Exception) {
 				s.log.Error().Str("handler", "tcp").Err(exc).Msg("")
 			})
 		}()
@@ -135,9 +134,9 @@ func (s *NetworkStack) setUDPHandler() {
 			return true
 		}
 		go func() {
-			throw.Try(func() {
+			Try(func() {
 				s.handleUDP(gonet.NewUDPConn(&wq, ep), &id)
-			}).Catch(func(exc *throw.Exception) {
+			}).Catch(func(exc *Exception) {
 				s.log.Error().Str("handler", "udp").Err(exc).Msg("")
 			})
 		}()
@@ -153,13 +152,13 @@ func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpoint
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
-	dstConn := throw.Throw2(s.socksTCPConn.DialContext(ctx, "tcp", address))
+	dstConn := Throw2(s.socksTCPConn.DialContext(ctx, "tcp", address))
 	defer dstConn.Close()
 
 	localConn = NewTimeoutConn(localConn, s.TcpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.TcpIOTimeout)
 	// relay TCP connections
-	throw.Throw(s.transporter.Transport(localConn, dstConn))
+	Throw(s.transporter.Transport(localConn, dstConn))
 }
 
 func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) {
@@ -170,13 +169,13 @@ func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpoint
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
-	dstConn := throw.Throw2(s.socksUDPConn.DialContext(ctx, "udp", dstAddress))
+	dstConn := Throw2(s.socksUDPConn.DialContext(ctx, "udp", dstAddress))
 	defer dstConn.Close()
 
 	localConn = NewTimeoutConn(localConn, s.UdpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.UdpIOTimeout)
 	// relay UDP connections
-	throw.Throw(s.transporter.Transport(localConn, dstConn))
+	Throw(s.transporter.Transport(localConn, dstConn))
 }
 
 // defaultIPTables creates iptables rules that allow only TCP and UDP traffic

@@ -1,6 +1,6 @@
 //go:build linux
 
-package command
+package main
 
 import (
 	"encoding/json"
@@ -13,8 +13,6 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/v-byte-cpu/wirez/pkg/connect"
-	"github.com/v-byte-cpu/wirez/pkg/throw"
 	"go.uber.org/multierr"
 	"golang.org/x/sys/unix"
 )
@@ -30,15 +28,15 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 		Short: "Proxy application traffic through the socks5 server",
 		Long:  "Run a command in an unprivileged container that transparently proxies application traffic through the socks5 server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return throw.Try(func() {
+			return Try(func() {
 				if c.opts.ContainerUID < 0 {
-					throw.ThrowFmt("uid is negative")
+					ThrowFmt("uid is negative")
 				}
 				if c.opts.ContainerGID < 0 {
-					throw.ThrowFmt("gid is negative")
+					ThrowFmt("gid is negative")
 				}
 				if len(c.opts.ForwardProxies) == 0 {
-					throw.ThrowFmt("forward proxies list is empty")
+					ThrowFmt("forward proxies list is empty")
 				}
 				if c.opts.Quiet {
 					log = setLogLevel(log, -1)
@@ -78,7 +76,7 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 						},
 					}
 				}
-				throw.Throw(proc.Start())
+				Throw(proc.Start())
 
 				parentConn := newParentUnixSocketConn(parentFd)
 				tunFd := parentConn.ReceiveFd()
@@ -88,28 +86,28 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				tunMTU := parentConn.ReceiveMTU()
 				log.Debug().Uint32("mtu", tunMTU).Msg("")
 
-				dconn := connect.NewDirectConnector()
+				dconn := NewDirectConnector()
 				socksTCPConn := dconn
-				socksTCPConns := make([]connect.Connector, 0, len(c.opts.ForwardProxies)+1)
+				socksTCPConns := make([]Connector, 0, len(c.opts.ForwardProxies)+1)
 				socksTCPConns = append(socksTCPConns, dconn)
 				for _, proxyAddr := range forwardProxies {
-					socksTCPConn = connect.NewSOCKS5Connector(socksTCPConn, proxyAddr)
+					socksTCPConn = NewSOCKS5Connector(socksTCPConn, proxyAddr)
 					socksTCPConns = append(socksTCPConns, socksTCPConn)
 				}
 				socksUDPConn := dconn
 				for i, proxyAddr := range forwardProxies {
-					socksUDPConn = connect.NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
+					socksUDPConn = NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
 				}
-				socksTCPConn = connect.NewLocalForwardingConnector(dconn, socksTCPConn, nat)
-				socksUDPConn = connect.NewLocalForwardingConnector(dconn, socksUDPConn, nat)
+				socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
+				socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
 
-				stack := connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
-					socksTCPConn, socksUDPConn, connect.NewTransporter(log))
+				stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
+					socksTCPConn, socksUDPConn, NewTransporter(log))
 				defer stack.Close()
 
 				parentConn.SendACK()
 
-				throw.Throw(proc.Wait())
+				Throw(proc.Wait())
 			}).AsError()
 		},
 	}
@@ -154,7 +152,7 @@ func (o *runCmdOpts) initCliFlags(cmd *cobra.Command) {
 }
 
 func newUnixSocketPair() (parentFd, childFd int) {
-	fds := throw.Throw2(unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0))
+	fds := Throw2(unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0))
 	parentFd = fds[0]
 	childFd = fds[1]
 
@@ -163,7 +161,7 @@ func newUnixSocketPair() (parentFd, childFd int) {
 	if err != nil {
 		err = multierr.Append(err, unix.Close(parentFd))
 		err = multierr.Append(err, unix.Close(childFd))
-		throw.Throw(err)
+		Throw(err)
 	}
 	return
 }
@@ -188,25 +186,25 @@ func (c *parentUnixSocketConn) ReceiveFd() int {
 	// receive socket control message
 	b := make([]byte, unix.CmsgSpace(4))
 	_, _, _, _, err := unix.Recvmsg(c.socketFd, nil, b, 0)
-	throw.Throw(err)
+	Throw(err)
 
 	// parse socket control message
-	cmsgs := throw.Throw2(unix.ParseSocketControlMessage(b))
-	tunFds := throw.Throw2(unix.ParseUnixRights(&cmsgs[0]))
+	cmsgs := Throw2(unix.ParseSocketControlMessage(b))
+	tunFds := Throw2(unix.ParseUnixRights(&cmsgs[0]))
 	if len(tunFds) == 0 {
-		throw.ThrowFmt("tun fds slice is empty")
+		ThrowFmt("tun fds slice is empty")
 	}
 	return tunFds[0]
 }
 
 func (c *parentUnixSocketConn) ReceiveMTU() uint32 {
 	var msg MTUMessage
-	throw.Throw(json.NewDecoder(c.socketFile).Decode(&msg))
+	Throw(json.NewDecoder(c.socketFile).Decode(&msg))
 	return msg.MTU
 }
 
 func (c *parentUnixSocketConn) SendACK() {
-	throw.Throw(json.NewEncoder(c.socketFile).Encode(&ACKMessage{ACK: true}))
+	Throw(json.NewEncoder(c.socketFile).Encode(&ACKMessage{ACK: true}))
 }
 
 type ACKMessage struct {

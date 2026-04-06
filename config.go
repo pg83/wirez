@@ -1,4 +1,4 @@
-package command
+package main
 
 import (
 	"bufio"
@@ -10,12 +10,10 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/pflag"
-	"github.com/v-byte-cpu/wirez/pkg/connect"
-	"github.com/v-byte-cpu/wirez/pkg/throw"
 )
 
-func parseProxyFile(proxyFile io.Reader) []*connect.SocksAddr {
-	var socksAddrs []*connect.SocksAddr
+func parseProxyFile(proxyFile io.Reader) []*SocksAddr {
+	var socksAddrs []*SocksAddr
 	bs := bufio.NewScanner(proxyFile)
 	for bs.Scan() {
 		rawSocksAddr := strings.Trim(bs.Text(), " ")
@@ -24,36 +22,36 @@ func parseProxyFile(proxyFile io.Reader) []*connect.SocksAddr {
 		}
 		socksAddrs = append(socksAddrs, parseProxyURL(rawSocksAddr))
 	}
-	throw.Throw(bs.Err())
+	Throw(bs.Err())
 	return socksAddrs
 }
 
-func parseProxyURL(proxyURL string) *connect.SocksAddr {
+func parseProxyURL(proxyURL string) *SocksAddr {
 	proxyURL = strings.Trim(proxyURL, " ")
 	if !strings.Contains(proxyURL, "//") {
 		proxyURL = "socks5://" + proxyURL
 	}
-	socksURL := throw.Throw2(url.Parse(proxyURL))
+	socksURL := Throw2(url.Parse(proxyURL))
 	if socksURL.Scheme != "socks5" {
-		throw.ThrowFmt("invalid socks5 scheme")
+		ThrowFmt("invalid socks5 scheme")
 	}
-	throw.Throw3(net.SplitHostPort(socksURL.Host))
-	return &connect.SocksAddr{Address: socksURL.Host, Auth: socksURL.User}
+	Throw3(net.SplitHostPort(socksURL.Host))
+	return &SocksAddr{Address: socksURL.Host, Auth: socksURL.User}
 }
 
-func parseProxyURLs(proxyURLs []string) []*connect.SocksAddr {
-	result := make([]*connect.SocksAddr, 0, len(proxyURLs))
+func parseProxyURLs(proxyURLs []string) []*SocksAddr {
+	result := make([]*SocksAddr, 0, len(proxyURLs))
 	for _, proxyURL := range proxyURLs {
 		result = append(result, parseProxyURL(proxyURL))
 	}
 	return result
 }
 
-func parseAddressMapper(addressMappings []string) connect.AddressMapper {
-	m := connect.NewAddressMapper()
+func parseAddressMapper(addressMappings []string) AddressMapper {
+	m := NewAddressMapper()
 	for _, mapping := range addressMappings {
 		network, fromAddress, targetAddress := parseMapping(mapping)
-		throw.Throw(m.AddAddressMapping(network, fromAddress, targetAddress))
+		Throw(m.AddAddressMapping(network, fromAddress, targetAddress))
 	}
 	return m
 }
@@ -68,12 +66,12 @@ func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 	targetPort, rest := takeLastPort(parts[0])
 	targetHost, rest := takeLastHost(rest)
 	if len(targetHost) == 0 {
-		throw.ThrowFmt("empty target host in mapping %s", mapping)
+		ThrowFmt("empty target host in mapping %s", mapping)
 	}
 	fromPort, rest := takeLastPort(rest)
 	fromHost, rest := takeLastHost(rest)
 	if len(rest) > 0 {
-		throw.ThrowFmt("invalid source address in mapping %s", mapping)
+		ThrowFmt("invalid source address in mapping %s", mapping)
 	}
 	fromAddress = net.JoinHostPort(fromHost, fromPort)
 	targetAddress = net.JoinHostPort(targetHost, targetPort)
@@ -98,17 +96,17 @@ func takeLastHost(input string) (host, rest string) {
 func takeLastIPv6Host(input string) (host, rest string) {
 	idx := strings.LastIndex(input, "[")
 	if idx == -1 {
-		throw.ThrowFmt("invalid IPv6 address")
+		ThrowFmt("invalid IPv6 address")
 	}
 	host = input[idx+1 : len(input)-1]
 	if idx > 0 {
 		if input[idx-1] != ':' {
-			throw.ThrowFmt("missing colon before host")
+			ThrowFmt("missing colon before host")
 		}
 		rest = input[:idx-1]
 	}
 	if ip := net.ParseIP(host); ip == nil {
-		throw.ThrowFmt("invalid IPv6 address")
+		ThrowFmt("invalid IPv6 address")
 	}
 	return
 }
@@ -119,7 +117,7 @@ func takeLastPort(input string) (port, rest string) {
 	if idx > 0 {
 		rest = input[:idx]
 	}
-	throw.Throw2(strconv.ParseUint(port, 10, 16))
+	Throw2(strconv.ParseUint(port, 10, 16))
 	return
 }
 
