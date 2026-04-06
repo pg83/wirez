@@ -103,8 +103,8 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 				socksTCPConn = connect.NewLocalForwardingConnector(dconn, socksTCPConn, nat)
 				socksUDPConn = connect.NewLocalForwardingConnector(dconn, socksUDPConn, nat)
 
-				stack := throw.Throw2(connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
-					socksTCPConn, socksUDPConn, connect.NewTransporter(log)))
+				stack := connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
+					socksTCPConn, socksUDPConn, connect.NewTransporter(log))
 				defer stack.Close()
 
 				parentConn.SendACK()

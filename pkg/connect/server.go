@@ -3,7 +3,6 @@ package connect
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"time"
 
@@ -41,26 +40,28 @@ func (h *serverHandler) Handle(conn net.Conn) (err error) {
 			h.log.Error().Err(err).Msg("")
 		}
 	}()
-	conn = gosocks5.ServerConn(conn, h.selector)
-	defer conn.Close()
-	req := throw.Throw2(gosocks5.ReadRequest(conn))
+	return throw.Try(func() {
+		conn = gosocks5.ServerConn(conn, h.selector)
+		defer conn.Close()
+		req := throw.Throw2(gosocks5.ReadRequest(conn))
 
-	switch req.Cmd {
-	case gosocks5.CmdConnect:
-		return h.handleConnect(conn, req)
-	case gosocks5.CmdUdp:
-		return h.handleUDPAssociate(conn, req)
-	default:
-		return fmt.Errorf("%d: unsupported command", gosocks5.CmdUnsupported)
-	}
+		switch req.Cmd {
+		case gosocks5.CmdConnect:
+			h.handleConnect(conn, req)
+		case gosocks5.CmdUdp:
+			h.handleUDPAssociate(conn, req)
+		default:
+			throw.ThrowFmt("%d: unsupported command", gosocks5.CmdUnsupported)
+		}
+	}).AsError()
 }
 
-func (h *serverHandler) handleConnect(localConn net.Conn, req *gosocks5.Request) error {
+func (h *serverHandler) handleConnect(localConn net.Conn, req *gosocks5.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), h.connectTimeout)
 	defer cancel()
 	dstConn, err := h.socksTCPConn.DialContext(ctx, "tcp", req.Addr.String())
 	if err != nil {
-		return multierr.Append(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(localConn))
+		throw.Throw(multierr.Append(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(localConn)))
 	}
 	defer dstConn.Close()
 
@@ -68,10 +69,10 @@ func (h *serverHandler) handleConnect(localConn net.Conn, req *gosocks5.Request)
 
 	localConn = NewTimeoutConn(localConn, h.tcpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, h.tcpIOTimeout)
-	return h.transporter.Transport(localConn, dstConn)
+	throw.Throw(h.transporter.Transport(localConn, dstConn))
 }
 
-func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Request) error {
+func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Request) {
 	localHost, _ := throw.Throw3(net.SplitHostPort(localConn.LocalAddr().String()))
 	listenAddr := throw.Throw2(net.ResolveUDPAddr("udp", localHost+":"))
 	listenConn := throw.Throw2(net.ListenUDP("udp", listenAddr))
@@ -96,7 +97,7 @@ func (h *serverHandler) handleUDPAssociate(localConn net.Conn, req *gosocks5.Req
 
 	localUDPConn := &firstConnectUDPConn{UDPConn: listenConn, targetAddr: sourceAddr}
 	localConn = NewTimeoutConn(localConn, h.udpIOTimeout)
-	return h.transporter.Transport(localUDPConn, dstConn)
+	throw.Throw(h.transporter.Transport(localUDPConn, dstConn))
 }
 
 type firstConnectUDPConn struct {

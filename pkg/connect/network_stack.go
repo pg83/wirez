@@ -35,7 +35,7 @@ type NetworkStack struct {
 }
 
 func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr string,
-	socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) (*NetworkStack, error) {
+	socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) *NetworkStack {
 	s := &NetworkStack{
 		log:            log,
 		socksTCPConn:   socksTCPConn,
@@ -78,7 +78,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 
 	s.setTCPHandler()
 	s.setUDPHandler()
-	return s, nil
+	return s
 }
 
 func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
