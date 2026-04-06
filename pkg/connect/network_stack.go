@@ -65,7 +65,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 	}))
 
 	var defaultNICID tcpip.NICID = 0x01
-	throwTCPIP := func(err *tcpip.Error) {
+	throwTCPIP := func(err tcpip.Error) {
 		if err != nil {
 			throw.ThrowFmt("%s", err)
 		}

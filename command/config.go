@@ -35,7 +35,7 @@ func parseProxyURL(proxyURL string) *connect.SocksAddr {
 	}
 	socksURL := throw.Throw2(url.Parse(proxyURL))
 	if socksURL.Scheme != "socks5" {
-		throw.Throw(errors.New("invalid socks5 scheme"))
+		throw.ThrowFmt("invalid socks5 scheme")
 	}
 	throw.Throw3(net.SplitHostPort(socksURL.Host))
 	return &connect.SocksAddr{Address: socksURL.Host, Auth: socksURL.User}
