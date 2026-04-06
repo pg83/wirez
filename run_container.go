@@ -1,5 +1,3 @@
-//go:build linux
-
 package main
 
 import (
@@ -35,8 +33,10 @@ func runContainer(args []string) error {
 
 	return Try(func() {
 		Throw(syscall.Sethostname([]byte(*hostname)))
+
 		childConn := newChildUnixSocketConn(*pipeFd)
 		defer childConn.Close()
+
 		tunFd := Throw2(tun.Open(tunDevice))
 		defer unix.Close(tunFd)
 
