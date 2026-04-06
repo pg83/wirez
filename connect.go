@@ -12,11 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"errors"
 	"log/slog"
 
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/client"
-	"go.uber.org/multierr"
 )
 
 const (
@@ -89,7 +89,7 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 	}).AsError()
 
 	if conn != nil {
-		err = multierr.Append(err, conn.SetDeadline(time.Time{}))
+		err = errors.Join(err, conn.SetDeadline(time.Time{}))
 	}
 
 	return
@@ -176,11 +176,11 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 	}).AsError()
 
 	if socksConn != nil {
-		err = multierr.Append(err, socksConn.SetDeadline(time.Time{}))
+		err = errors.Join(err, socksConn.SetDeadline(time.Time{}))
 	}
 
 	if err != nil && socksConn != nil {
-		err = multierr.Append(err, socksConn.Close())
+		err = errors.Join(err, socksConn.Close())
 	}
 
 	return
@@ -208,7 +208,7 @@ func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
 func (c *socksRawUDPConn) Close() error {
 	err := c.Conn.Close()
 
-	return multierr.Append(err, c.tcpConn.Close())
+	return errors.Join(err, c.tcpConn.Close())
 }
 
 func newSocksUDPConn(udpConn net.Conn, tcpConn net.Conn, dstAddr *net.UDPAddr) *socksUDPConn {
@@ -287,7 +287,7 @@ func (c *socksUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 func (c *socksUDPConn) Close() error {
 	err := c.Conn.Close()
 
-	return multierr.Append(err, c.tcpConn.Close())
+	return errors.Join(err, c.tcpConn.Close())
 }
 
 // TODO performance metrics

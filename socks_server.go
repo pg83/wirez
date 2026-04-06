@@ -9,7 +9,6 @@ import (
 
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/server"
-	"go.uber.org/multierr"
 )
 
 func NewSOCKS5ServerHandler(log *slog.Logger, socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) server.Handler {
@@ -63,7 +62,7 @@ func (h *serverHandler) handleConnect(localConn net.Conn, req *gosocks5.Request)
 	dstConn, err := h.socksTCPConn.DialContext(ctx, "tcp", req.Addr.String())
 
 	if err != nil {
-		Throw(multierr.Append(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(localConn)))
+		Throw(errors.Join(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(localConn)))
 	}
 
 	defer dstConn.Close()

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"syscall"
 
+	"errors"
 	"log/slog"
 
 	"github.com/spf13/cobra"
-	"go.uber.org/multierr"
 	"golang.org/x/sys/unix"
 )
 
@@ -176,8 +176,8 @@ func newUnixSocketPair() (parentFd, childFd int) {
 	_, err := unix.FcntlInt(uintptr(parentFd), unix.F_SETFD, unix.FD_CLOEXEC)
 
 	if err != nil {
-		err = multierr.Append(err, unix.Close(parentFd))
-		err = multierr.Append(err, unix.Close(childFd))
+		err = errors.Join(err, unix.Close(parentFd))
+		err = errors.Join(err, unix.Close(childFd))
 
 		Throw(err)
 	}
