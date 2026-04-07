@@ -5,16 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 	"time"
-)
-
-var (
-	trPool = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 1<<16)
-		},
-	}
 )
 
 type TimeoutConn struct {
@@ -58,11 +49,7 @@ type transporter struct {
 func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
 	errc := make(chan error, 1)
 	copyBuf := func(w io.Writer, r io.Reader) {
-		buf := trPool.Get().([]byte)
-		defer trPool.Put(buf) //nolint:staticcheck
-
-		_, err := io.CopyBuffer(w, r, buf)
-
+		_, err := io.Copy(w, r)
 		errc <- err
 	}
 
