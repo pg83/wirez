@@ -128,8 +128,6 @@ func setupIPNetwork() {
 	}))
 }
 
-const resolvConfTmpDir = "/tmp/.wirez-resolv"
-
 func setupResolvConf() {
 	// Prevent mount propagation to the host.
 	Throw(unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""))
@@ -142,10 +140,10 @@ func setupResolvConf() {
 	ip[3]++
 
 	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
-	Throw(os.MkdirAll(resolvConfTmpDir, 0755))
-	Throw(unix.Mount("tmpfs", resolvConfTmpDir, "tmpfs", 0, "size=4k"))
+	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-resolv-"))
+	Throw(unix.Mount("tmpfs", tmpDir, "tmpfs", 0, "size=4k"))
 
-	tmpFile := resolvConfTmpDir + "/resolv.conf"
+	tmpFile := tmpDir + "/resolv.conf"
 
 	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
 	// Bind mount over /etc/resolv.conf.
