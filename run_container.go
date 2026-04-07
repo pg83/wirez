@@ -46,6 +46,7 @@ func runContainer(args []string) {
 
 	setupIPNetwork()
 	setupResolvConf()
+	setupHosts()
 
 	cmdArgs := fs.Args()
 	proc := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -148,6 +149,22 @@ func setupResolvConf() {
 	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
 	// Bind mount over /etc/resolv.conf.
 	Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
+}
+
+func setupHosts() {
+	ip, _ := Throw3(net.ParseCIDR(tunNetworkAddr))
+	ip = ip.To4()
+	ip[3]++
+
+	hosts := ip.String() + " localhost\n"
+
+	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-hosts-"))
+	Throw(unix.Mount("tmpfs", tmpDir, "tmpfs", 0, "size=4k"))
+
+	tmpFile := tmpDir + "/hosts"
+
+	Throw(os.WriteFile(tmpFile, []byte(hosts), 0644))
+	Throw(unix.Mount(tmpFile, "/etc/hosts", "", unix.MS_BIND, ""))
 }
 
 func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {
