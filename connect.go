@@ -294,7 +294,7 @@ func (c *localForwardingConnector) DialContext(ctx context.Context, network, add
 
 type AddressMapper interface {
 	MapAddress(network, address string) (mappedAddress string, exists bool)
-	AddAddressMapping(network, fromAddress, toAddress string) error
+	AddAddressMapping(network, fromAddress, toAddress string)
 }
 
 type addressMapper struct {
@@ -322,26 +322,24 @@ func (m *addressMapper) MapAddress(network, address string) (mappedAddress strin
 	return
 }
 
-func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string) error {
+func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return Try(func() {
-		if _, ok := m.nat[network]; !ok {
-			m.nat[network] = make(map[string]string)
-		}
+	if _, ok := m.nat[network]; !ok {
+		m.nat[network] = make(map[string]string)
+	}
 
-		if !strings.Contains(fromAddress, ":") {
-			fromAddress = ":" + fromAddress
-		}
+	if !strings.Contains(fromAddress, ":") {
+		fromAddress = ":" + fromAddress
+	}
 
-		host, port := Throw3(net.SplitHostPort(fromAddress))
-		Throw2(strconv.ParseUint(port, 10, 16))
+	host, port := Throw3(net.SplitHostPort(fromAddress))
+	Throw2(strconv.ParseUint(port, 10, 16))
 
-		if host == "" || host == "0.0.0.0" {
-			fromAddress = port
-		}
+	if host == "" || host == "0.0.0.0" {
+		fromAddress = port
+	}
 
-		m.nat[network][fromAddress] = toAddress
-	}).AsError()
+	m.nat[network][fromAddress] = toAddress
 }

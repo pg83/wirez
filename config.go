@@ -43,7 +43,7 @@ func parseAddressMapper(addressMappings []string) AddressMapper {
 	for _, mapping := range addressMappings {
 		network, fromAddress, targetAddress := parseMapping(mapping)
 
-		Throw(m.AddAddressMapping(network, fromAddress, targetAddress))
+		m.AddAddressMapping(network, fromAddress, targetAddress)
 	}
 
 	return m
