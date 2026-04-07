@@ -1,4 +1,4 @@
-module github.com/v-byte-cpu/wirez
+module github.com/pg83/wirez
 
 go 1.25.5
 
