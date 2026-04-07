@@ -227,48 +227,42 @@ type socksUDPConn struct {
 	dstAddr *net.UDPAddr
 }
 
-var _ net.PacketConn = (*socksUDPConn)(nil)
 var _ net.Conn = (*socksUDPConn)(nil)
 
 func (c *socksUDPConn) Read(b []byte) (n int, err error) {
-	n, _, err = c.ReadFrom(b)
+	err = Try(func() {
+		n = c.readFrom(b)
+	}).AsError()
 
 	return
 }
 
 func (c *socksUDPConn) Write(b []byte) (n int, err error) {
-	n, err = c.WriteTo(b, c.dstAddr)
-
-	return n, err
-}
-
-func (c *socksUDPConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	err = Try(func() {
-		toAddr := Throw2(gosocks5.NewAddr(addr.String()))
-
-		// TODO buffer pool
-		buf := &bytes.Buffer{}
-		h := &gosocks5.UDPHeader{Addr: toAddr}
-		Throw(h.Write(buf))
-		Throw2(buf.Write(b))
-		Throw2(c.Conn.Write(buf.Bytes()))
-
+		c.writeTo(b, c.dstAddr)
 		n = len(b)
 	}).AsError()
 
 	return
 }
 
-func (c *socksUDPConn) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
-	err = Try(func() {
-		rn := Throw2(c.Conn.Read(b))
-		packet := Throw2(gosocks5.ReadUDPDatagram(bytes.NewBuffer(b[:rn])))
-		copy(b, packet.Data)
-		n = len(packet.Data)
-		addr = Throw2(net.ResolveUDPAddr("udp", packet.Header.Addr.String()))
-	}).AsError()
+func (c *socksUDPConn) writeTo(b []byte, addr net.Addr) {
+	toAddr := Throw2(gosocks5.NewAddr(addr.String()))
 
-	return
+	// TODO buffer pool
+	buf := &bytes.Buffer{}
+	h := &gosocks5.UDPHeader{Addr: toAddr}
+	Throw(h.Write(buf))
+	Throw2(buf.Write(b))
+	Throw2(c.Conn.Write(buf.Bytes()))
+}
+
+func (c *socksUDPConn) readFrom(b []byte) int {
+	rn := Throw2(c.Conn.Read(b))
+	packet := Throw2(gosocks5.ReadUDPDatagram(bytes.NewBuffer(b[:rn])))
+	copy(b, packet.Data)
+
+	return len(packet.Data)
 }
 
 func (c *socksUDPConn) Close() error {
