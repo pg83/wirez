@@ -15,25 +15,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	var err error
-
-	switch os.Args[1] {
-	case "runc":
-		err = runContainer(os.Args[2:])
-	default:
-		err = runRun(log, os.Args[1:])
-	}
-
-	if err != nil {
+	Try(func() {
+		switch os.Args[1] {
+		case "runc":
+			runContainer(os.Args[2:])
+		default:
+			runRun(log, os.Args[1:])
+		}
+	}).Catch(func(e *Exception) {
 		var exitError *exec.ExitError
 
-		if errors.As(err, &exitError) {
+		if errors.As(e, &exitError) {
 			os.Exit(exitError.ExitCode())
 		}
 
-		log.Error("error", "err", err)
+		log.Error("error", "err", e)
 		os.Exit(1)
-	}
+	})
 }
 
 func printUsage() {

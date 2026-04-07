@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func runRun(log *slog.Logger, args []string) error {
+func runRun(log *slog.Logger, args []string) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 
 	var forwardProxies stringArrayFlag
@@ -30,105 +30,101 @@ func runRun(log *slog.Logger, args []string) error {
 	uid := fs.Int("uid", os.Geteuid(), "set uid of container process")
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
 
-	return Try(func() {
-		Throw(fs.Parse(args))
+	Throw(fs.Parse(args))
 
-		if *uid < 0 {
-			ThrowFmt("uid is negative")
+	if *uid < 0 {
+		ThrowFmt("uid is negative")
+	}
+
+	if *gid < 0 {
+		ThrowFmt("gid is negative")
+	}
+
+	if len(forwardProxies) == 0 {
+		ThrowFmt("forward proxies list is empty")
+	}
+
+	if *quiet {
+		log = setLogLevel(-1)
+	} else {
+		log = setLogLevel(int(verboseLevel))
+	}
+
+	log.Debug("forward", "proxies", []string(forwardProxies))
+	log.Debug("local_address_mappings", "mappings", []string(localMappings))
+
+	parsedProxies := parseProxyURLs(forwardProxies)
+	nat := parseAddressMapper(localMappings)
+
+	parentFd, childFd := newUnixSocketPair()
+	defer unix.Close(parentFd)
+	defer unix.Close(childFd)
+
+	privileged := os.Geteuid() == 0
+
+	cmdArgs := fs.Args()
+	proc := exec.Command("/proc/self/exe", append([]string{"runc",
+		"-unix-fd", strconv.Itoa(childFd), fmt.Sprintf("-privileged=%t", privileged),
+		"-uid", strconv.Itoa(*uid), "-gid", strconv.Itoa(*gid), "--"}, cmdArgs...)...)
+	proc.Stdin = os.Stdin
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
+
+	if privileged {
+		proc.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
 		}
-
-		if *gid < 0 {
-			ThrowFmt("gid is negative")
+	} else {
+		proc.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
+			Credential: &syscall.Credential{Uid: 0, Gid: uint32(*gid)},
+			UidMappings: []syscall.SysProcIDMap{
+				{ContainerID: 0, HostID: os.Geteuid(), Size: 1},
+			},
+			GidMappings: []syscall.SysProcIDMap{
+				{ContainerID: *gid, HostID: os.Getegid(), Size: 1},
+			},
 		}
+	}
 
-		if len(forwardProxies) == 0 {
-			ThrowFmt("forward proxies list is empty")
-		}
+	Throw(proc.Start())
 
-		if *quiet {
-			log = setLogLevel(-1)
-		} else {
-			log = setLogLevel(int(verboseLevel))
-		}
+	parentConn := newParentUnixSocketConn(parentFd)
 
-		log.Debug("forward", "proxies", []string(forwardProxies))
-		log.Debug("local_address_mappings", "mappings", []string(localMappings))
+	tunFd := parentConn.ReceiveFd()
+	defer unix.Close(tunFd)
 
-		parsedProxies := parseProxyURLs(forwardProxies)
-		nat := parseAddressMapper(localMappings)
+	tunMTU := parentConn.ReceiveMTU()
 
-		parentFd, childFd := newUnixSocketPair()
+	log.Debug("got tun device", "fd", tunFd)
+	log.Debug("mtu", "mtu", tunMTU)
 
-		defer unix.Close(parentFd)
-		defer unix.Close(childFd)
+	dconn := NewDirectConnector()
 
-		privileged := os.Geteuid() == 0
+	socksTCPConn := dconn
+	socksTCPConns := make([]Connector, 0, len(forwardProxies)+1)
+	socksTCPConns = append(socksTCPConns, dconn)
 
-		cmdArgs := fs.Args()
-		proc := exec.Command("/proc/self/exe", append([]string{"runc",
-			"-unix-fd", strconv.Itoa(childFd), fmt.Sprintf("-privileged=%t", privileged),
-			"-uid", strconv.Itoa(*uid), "-gid", strconv.Itoa(*gid), "--"}, cmdArgs...)...)
+	for _, proxyAddr := range parsedProxies {
+		socksTCPConn = NewSOCKS5Connector(socksTCPConn, proxyAddr)
+		socksTCPConns = append(socksTCPConns, socksTCPConn)
+	}
 
-		proc.Stdin = os.Stdin
-		proc.Stdout = os.Stdout
-		proc.Stderr = os.Stderr
+	socksUDPConn := dconn
 
-		if privileged {
-			proc.SysProcAttr = &syscall.SysProcAttr{
-				Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
-			}
-		} else {
-			proc.SysProcAttr = &syscall.SysProcAttr{
-				Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
-				Credential: &syscall.Credential{Uid: 0, Gid: uint32(*gid)},
-				UidMappings: []syscall.SysProcIDMap{
-					{ContainerID: 0, HostID: os.Geteuid(), Size: 1},
-				},
-				GidMappings: []syscall.SysProcIDMap{
-					{ContainerID: *gid, HostID: os.Getegid(), Size: 1},
-				},
-			}
-		}
+	for i, proxyAddr := range parsedProxies {
+		socksUDPConn = NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
+	}
 
-		Throw(proc.Start())
+	socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
+	socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
 
-		parentConn := newParentUnixSocketConn(parentFd)
+	stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, socksTCPConn, socksUDPConn, NewTransporter(log))
+	defer stack.Close()
 
-		tunFd := parentConn.ReceiveFd()
-		defer unix.Close(tunFd)
+	parentConn.SendACK()
 
-		tunMTU := parentConn.ReceiveMTU()
-
-		log.Debug("got tun device", "fd", tunFd)
-		log.Debug("mtu", "mtu", tunMTU)
-
-		dconn := NewDirectConnector()
-
-		socksTCPConn := dconn
-		socksTCPConns := make([]Connector, 0, len(forwardProxies)+1)
-		socksTCPConns = append(socksTCPConns, dconn)
-
-		for _, proxyAddr := range parsedProxies {
-			socksTCPConn = NewSOCKS5Connector(socksTCPConn, proxyAddr)
-			socksTCPConns = append(socksTCPConns, socksTCPConn)
-		}
-
-		socksUDPConn := dconn
-
-		for i, proxyAddr := range parsedProxies {
-			socksUDPConn = NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
-		}
-
-		socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
-		socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
-
-		stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, socksTCPConn, socksUDPConn, NewTransporter(log))
-		defer stack.Close()
-
-		parentConn.SendACK()
-
-		Throw(proc.Wait())
-	}).AsError()
+	Throw(proc.Wait())
 }
 
 func newUnixSocketPair() (parentFd, childFd int) {

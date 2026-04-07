@@ -19,7 +19,7 @@ const (
 	tunNetworkAddr = "10.1.1.1/24"
 )
 
-func runContainer(args []string) error {
+func runContainer(args []string) {
 	fs := flag.NewFlagSet("runc", flag.ContinueOnError)
 	hostname := fs.String("hostname", "wirez", "set container hostname")
 	pipeFd := fs.Int("unix-fd", 0, "set unix pipe fd")
@@ -27,53 +27,50 @@ func runContainer(args []string) error {
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
 	privileged := fs.Bool("privileged", false, "indicates if started with root privileges")
 
-	return Try(func() {
-		Throw(fs.Parse(args))
-		Throw(syscall.Sethostname([]byte(*hostname)))
+	Throw(fs.Parse(args))
+	Throw(syscall.Sethostname([]byte(*hostname)))
 
-		childConn := newChildUnixSocketConn(*pipeFd)
-		defer childConn.Close()
+	childConn := newChildUnixSocketConn(*pipeFd)
+	defer childConn.Close()
 
-		tunFd := Throw2(tun.Open(tunDevice))
-		defer unix.Close(tunFd)
+	tunFd := Throw2(tun.Open(tunDevice))
+	defer unix.Close(tunFd)
 
-		childConn.SendFd(tunFd)
+	childConn.SendFd(tunFd)
 
-		link := Throw2(netlink.LinkByName(tunDevice))
+	link := Throw2(netlink.LinkByName(tunDevice))
+	childConn.SendMTU(uint32(link.Attrs().MTU))
 
-		childConn.SendMTU(uint32(link.Attrs().MTU))
+	// wait for starting network stack
+	childConn.ReceiveACK()
 
-		// wait for starting network stack
-		childConn.ReceiveACK()
+	setupIPNetwork()
+	setupResolvConf()
 
-		setupIPNetwork()
-		setupResolvConf()
+	cmdArgs := fs.Args()
+	proc := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	proc.Stdin = os.Stdin
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
 
-		cmdArgs := fs.Args()
-		proc := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-		proc.Stdin = os.Stdin
-		proc.Stdout = os.Stdout
-		proc.Stderr = os.Stderr
-
-		if *privileged {
-			proc.SysProcAttr = &syscall.SysProcAttr{
-				Credential: &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)},
-			}
-		} else if *uid != 0 {
-			proc.SysProcAttr = &syscall.SysProcAttr{
-				Cloneflags: syscall.CLONE_NEWUSER,
-				Credential: &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)},
-				UidMappings: []syscall.SysProcIDMap{
-					{ContainerID: *uid, HostID: os.Geteuid(), Size: 1},
-				},
-				GidMappings: []syscall.SysProcIDMap{
-					{ContainerID: *gid, HostID: os.Getegid(), Size: 1},
-				},
-			}
+	if *privileged {
+		proc.SysProcAttr = &syscall.SysProcAttr{
+			Credential: &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)},
 		}
+	} else if *uid != 0 {
+		proc.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: syscall.CLONE_NEWUSER,
+			Credential: &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)},
+			UidMappings: []syscall.SysProcIDMap{
+				{ContainerID: *uid, HostID: os.Geteuid(), Size: 1},
+			},
+			GidMappings: []syscall.SysProcIDMap{
+				{ContainerID: *gid, HostID: os.Getegid(), Size: 1},
+			},
+		}
+	}
 
-		Throw(proc.Run())
-	}).AsError()
+	Throw(proc.Run())
 }
 
 type childUnixSocketConn struct {
