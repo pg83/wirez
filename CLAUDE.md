@@ -1,5 +1,9 @@
 # Style Guide
 
+## Coding conventions
+
+- Git author: `claude <claude@users.noreply.github.com>`. Commit messages in English.
+
 ## Blank lines around control blocks
 
 Before and after `if`, `for`, `switch`, `select`, `go func`, `defer func` — add a blank line.
