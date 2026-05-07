@@ -49,6 +49,17 @@ func parseAddressMapper(addressMappings []string) AddressMapper {
 	return m
 }
 
+func parseBypassNets(cidrs []string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+
+	for _, c := range cidrs {
+		_, n := Throw3(net.ParseCIDR(c))
+		nets = append(nets, n)
+	}
+
+	return nets
+}
+
 func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 	parts := strings.Split(mapping, "/")
 

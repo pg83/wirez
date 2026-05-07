@@ -42,6 +42,7 @@ Proxy application traffic through the socks5 server.
 Flags:
   -F address    socks5 proxy address to forward TCP/UDP packets
   -L mapping    local address mapping [target_host:]port:host:hostport[/proto]
+  -B cidr       bypass CIDR — destinations in this network go direct, not via SOCKS
   -v            log verbose level (repeat for more)
   -q            suppress all log output
   -uid int      set uid of container process

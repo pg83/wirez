@@ -275,22 +275,50 @@ type localForwardingConnector struct {
 	directConnector Connector
 	socksConnector  Connector
 	nat             AddressMapper
+	bypass          []*net.IPNet
 }
 
-func NewLocalForwardingConnector(directConnector Connector, socksConnector Connector, nat AddressMapper) Connector {
+func NewLocalForwardingConnector(directConnector Connector, socksConnector Connector, nat AddressMapper, bypass []*net.IPNet) Connector {
 	return &localForwardingConnector{
 		directConnector: directConnector,
 		socksConnector:  socksConnector,
 		nat:             nat,
+		bypass:          bypass,
 	}
 }
 
 func (c *localForwardingConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
+	if c.matchBypass(address) {
+		return c.directConnector.DialContext(ctx, network, address)
+	}
+
 	if newAddress, ok := c.nat.MapAddress(network, address); ok {
 		return c.directConnector.DialContext(ctx, network, newAddress)
 	}
 
 	return c.socksConnector.DialContext(ctx, network, address)
+}
+
+func (c *localForwardingConnector) matchBypass(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+
+	if err != nil {
+		return false
+	}
+
+	ip := net.ParseIP(host)
+
+	if ip == nil {
+		return false
+	}
+
+	for _, n := range c.bypass {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }
 
 type AddressMapper interface {

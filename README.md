@@ -44,6 +44,16 @@ Redirect TCP traffic to `10.10.10.10:2345` directly to `127.0.0.1:4567`:
 wirez -F 127.0.0.1:1234 -L 10.10.10.10:2345:127.0.0.1:4567/tcp bash
 ```
 
+### Bypass CIDR
+
+The `-B` flag takes a CIDR; any destination whose literal IP falls in that network goes direct (no SOCKS, no rewrite). Repeatable. Useful for "everything in my LAN goes around the proxy":
+
+```
+wirez -F 127.0.0.1:1234 -B 10.0.0.0/8 -B 192.168.0.0/16 -- curl http://10.0.0.65:8012
+```
+
+Bypass is checked before `-L` rewrites; matching is on the destination IP only — names go through the regular `-L`/SOCKS path.
+
 ### Proxy chaining
 
 Multiple `-F` flags create a proxy chain:
@@ -58,6 +68,7 @@ wirez -F proxy1:1080 -F proxy2:1080 -- curl example.com
 |------|-------------|
 | `-F address` | SOCKS5 proxy address (required, repeatable for chaining) |
 | `-L mapping` | Local address mapping `[target_host:]port:host:hostport[/proto]` |
+| `-B cidr` | Bypass CIDR — destinations in this network go direct, not via SOCKS (repeatable) |
 | `-v` | Increase log verbosity (repeat for more: `-vv`, `-vvv`) |
 | `-q` | Suppress all log output |
 | `-uid int` | Set UID of container process |

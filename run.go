@@ -20,10 +20,12 @@ func runRun(log *slog.Logger, args []string) {
 
 	var forwardProxies stringArrayFlag
 	var localMappings stringArrayFlag
+	var bypassCIDRs stringArrayFlag
 	var verboseLevel countFlag
 
 	fs.Var(&forwardProxies, "F", "socks5 proxy address to forward TCP/UDP packets")
 	fs.Var(&localMappings, "L", "local address mapping [target_host:]port:host:hostport[/proto]")
+	fs.Var(&bypassCIDRs, "B", "bypass CIDR — destinations whose IP falls in this network go direct, not through SOCKS")
 	fs.Var(&verboseLevel, "v", "log verbose level")
 
 	quiet := fs.Bool("q", false, "suppress all log output")
@@ -52,9 +54,11 @@ func runRun(log *slog.Logger, args []string) {
 
 	log.Debug("forward", "proxies", []string(forwardProxies))
 	log.Debug("local_address_mappings", "mappings", []string(localMappings))
+	log.Debug("bypass_cidrs", "cidrs", []string(bypassCIDRs))
 
 	parsedProxies := parseProxyURLs(forwardProxies)
 	nat := parseAddressMapper(localMappings)
+	bypass := parseBypassNets(bypassCIDRs)
 
 	parentFd, childFd := newUnixSocketPair()
 	defer unix.Close(parentFd)
@@ -116,8 +120,8 @@ func runRun(log *slog.Logger, args []string) {
 		socksUDPConn = NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
 	}
 
-	socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat)
-	socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat)
+	socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat, bypass)
+	socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat, bypass)
 
 	stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, socksTCPConn, socksUDPConn, NewTransporter(log))
 	defer stack.Close()
