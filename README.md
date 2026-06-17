@@ -62,6 +62,16 @@ Multiple `-F` flags create a proxy chain:
 wirez -F proxy1:1080 -F proxy2:1080 -- curl example.com
 ```
 
+### Local DNS resolver (IPv4-only)
+
+The `-D` flag starts a tiny DNS resolver on `127.0.0.1:53` inside the container and points `/etc/resolv.conf` at it. The resolver runs in the host network namespace, so it forwards queries to the given upstream DNS **directly, bypassing SOCKS**. It answers `AAAA` queries with an empty `NOERROR` (NODATA), so applications only ever see IPv4 addresses and fall back to IPv4 — handy when the proxy chain has no working IPv6.
+
+```
+wirez -F 127.0.0.1:1234 -D 1.1.1.1 -- curl example.com
+```
+
+The upstream accepts a bare IPv4/IPv6 address (port 53 implied) or an explicit `host:port`.
+
 ### IPv6
 
 `-F`, `-L` and `-B` all accept IPv6. Literal IPv6 addresses must be bracketed (`[..]`) so the address and port stay unambiguous; `-B` takes a plain IPv6 CIDR:
@@ -77,6 +87,7 @@ wirez -F '[::1]:1080' -B 'fd00::/8' -L '53:[2606:4700:4700::1111]:53/udp' -- cur
 | `-F address` | SOCKS5 proxy address (required, repeatable for chaining) |
 | `-L mapping` | Local address mapping `[target_host:]port:host:hostport[/proto]` |
 | `-B cidr` | Bypass CIDR — destinations in this network go direct, not via SOCKS (repeatable) |
+| `-D address` | Upstream DNS for the local IPv4-only resolver on `127.0.0.1:53` (forwarded direct, bypassing SOCKS) |
 | `-v` | Increase log verbosity (repeat for more: `-vv`, `-vvv`) |
 | `-q` | Suppress all log output |
 | `-uid int` | Set UID of container process |

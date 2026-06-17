@@ -28,6 +28,7 @@ func runRun(log *slog.Logger, args []string) {
 	fs.Var(&bypassCIDRs, "B", "bypass CIDR — destinations whose IP falls in this network go direct, not through SOCKS")
 	fs.Var(&verboseLevel, "v", "log verbose level")
 
+	dnsServer := fs.String("D", "", "upstream DNS address for the local IPv4-only resolver on 127.0.0.1:53")
 	quiet := fs.Bool("q", false, "suppress all log output")
 	uid := fs.Int("uid", os.Geteuid(), "set uid of container process")
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
@@ -59,6 +60,7 @@ func runRun(log *slog.Logger, args []string) {
 	parsedProxies := parseProxyURLs(forwardProxies)
 	nat := parseAddressMapper(localMappings)
 	bypass := parseBypassNets(bypassCIDRs)
+	dnsUpstream := parseUpstreamDNS(*dnsServer)
 
 	parentFd, childFd := newUnixSocketPair()
 	defer unix.Close(parentFd)
@@ -69,6 +71,7 @@ func runRun(log *slog.Logger, args []string) {
 	cmdArgs := fs.Args()
 	proc := exec.Command("/proc/self/exe", append([]string{"runc",
 		"-unix-fd", strconv.Itoa(childFd), fmt.Sprintf("-privileged=%t", privileged),
+		fmt.Sprintf("-dns=%t", dnsUpstream != ""),
 		"-uid", strconv.Itoa(*uid), "-gid", strconv.Itoa(*gid), "--"}, cmdArgs...)...)
 	proc.Stdin = os.Stdin
 	proc.Stdout = os.Stdout
@@ -95,8 +98,20 @@ func runRun(log *slog.Logger, args []string) {
 
 	parentConn := newParentUnixSocketConn(parentFd)
 
-	tunFd := parentConn.ReceiveFd()
+	fds := parentConn.ReceiveFds()
+
+	tunFd := fds[0]
 	defer unix.Close(tunFd)
+
+	dnsFd := -1
+
+	if dnsUpstream != "" {
+		if len(fds) < 2 {
+			ThrowFmt("dns socket fd not received")
+		}
+
+		dnsFd = fds[1]
+	}
 
 	tunMTU := parentConn.ReceiveMTU()
 
@@ -125,6 +140,11 @@ func runRun(log *slog.Logger, args []string) {
 
 	stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, socksTCPConn, socksUDPConn, NewTransporter(log))
 	defer stack.Close()
+
+	if dnsFd >= 0 {
+		log.Debug("starting local dns resolver", "upstream", dnsUpstream)
+		startDNSResolver(log, dnsFd, dnsUpstream)
+	}
 
 	parentConn.SendACK()
 
@@ -166,21 +186,21 @@ func (c *parentUnixSocketConn) Close() error {
 	return unix.Close(c.socketFd)
 }
 
-func (c *parentUnixSocketConn) ReceiveFd() int {
-	// receive socket control message
-	b := make([]byte, unix.CmsgSpace(4))
-	_, _, _, _, err := unix.Recvmsg(c.socketFd, nil, b, 0)
+func (c *parentUnixSocketConn) ReceiveFds() []int {
+	// receive socket control message (room for several fds)
+	b := make([]byte, unix.CmsgSpace(4*8))
+	_, oobn, _, _, err := unix.Recvmsg(c.socketFd, nil, b, 0)
 	Throw(err)
 
-	// parse socket control message
-	cmsgs := Throw2(unix.ParseSocketControlMessage(b))
-	tunFds := Throw2(unix.ParseUnixRights(&cmsgs[0]))
+	// parse socket control message (only the bytes actually received)
+	cmsgs := Throw2(unix.ParseSocketControlMessage(b[:oobn]))
+	fds := Throw2(unix.ParseUnixRights(&cmsgs[0]))
 
-	if len(tunFds) == 0 {
-		ThrowFmt("tun fds slice is empty")
+	if len(fds) == 0 {
+		ThrowFmt("received fds slice is empty")
 	}
 
-	return tunFds[0]
+	return fds
 }
 
 func (c *parentUnixSocketConn) ReceiveMTU() uint32 {

@@ -26,6 +26,7 @@ func runContainer(args []string) {
 	uid := fs.Int("uid", os.Geteuid(), "set uid of container process")
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
 	privileged := fs.Bool("privileged", false, "indicates if started with root privileges")
+	dns := fs.Bool("dns", false, "run local IPv4-only DNS resolver on 127.0.0.1:53")
 
 	Throw(fs.Parse(args))
 	Throw(syscall.Sethostname([]byte(*hostname)))
@@ -36,7 +37,18 @@ func runContainer(args []string) {
 	tunFd := Throw2(tun.Open(tunDevice))
 	defer unix.Close(tunFd)
 
-	childConn.SendFd(tunFd)
+	fds := []int{tunFd}
+
+	if *dns {
+		setupLoopback()
+
+		dnsFd := createResolverSocket()
+		defer unix.Close(dnsFd)
+
+		fds = append(fds, dnsFd)
+	}
+
+	childConn.SendFds(fds...)
 
 	link := Throw2(netlink.LinkByName(tunDevice))
 	childConn.SendMTU(uint32(link.Attrs().MTU))
@@ -45,7 +57,7 @@ func runContainer(args []string) {
 	childConn.ReceiveACK()
 
 	setupIPNetwork()
-	setupResolvConf()
+	setupResolvConf(*dns)
 	setupHosts()
 
 	cmdArgs := fs.Args()
@@ -90,8 +102,8 @@ func (c *childUnixSocketConn) Close() error {
 	return unix.Close(c.socketFd)
 }
 
-func (c *childUnixSocketConn) SendFd(fd int) {
-	rights := unix.UnixRights(fd)
+func (c *childUnixSocketConn) SendFds(fds ...int) {
+	rights := unix.UnixRights(fds...)
 
 	Throw(unix.Sendmsg(c.socketFd, nil, rights, nil, 0))
 }
@@ -116,10 +128,27 @@ type MTUMessage struct {
 	MTU uint32 `json:"mtu"`
 }
 
-func setupIPNetwork() {
+func setupLoopback() {
 	lo := Throw2(netlink.LinkByName(loDevice))
 
+	// Ensure 127.0.0.1 is present so a resolver can bind 127.0.0.1:53.
+	if addr, err := netlink.ParseAddr("127.0.0.1/8"); err == nil {
+		_ = netlink.AddrAdd(lo, addr)
+	}
+
 	Throw(netlink.LinkSetUp(lo))
+}
+
+func createResolverSocket() int {
+	fd := Throw2(unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0))
+
+	Throw(unix.Bind(fd, &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 1}}))
+
+	return fd
+}
+
+func setupIPNetwork() {
+	setupLoopback()
 
 	tun0, tunAddr := setupIPAddress(tunDevice, tunNetworkAddr)
 
@@ -129,16 +158,21 @@ func setupIPNetwork() {
 	}))
 }
 
-func setupResolvConf() {
+func setupResolvConf(dns bool) {
 	// Prevent mount propagation to the host.
 	Throw(unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""))
 
-	// Parse TUN IP and use next IP in subnet as nameserver,
-	// because the TUN IP itself is a local address and packets to it
-	// don't traverse the TUN device.
-	ip, _ := Throw3(net.ParseCIDR(tunNetworkAddr))
-	ip = ip.To4()
-	ip[3]++
+	// With a local resolver, point at 127.0.0.1. Otherwise use the next IP in
+	// the TUN subnet as nameserver, because the TUN IP itself is a local
+	// address and packets to it don't traverse the TUN device.
+	nameserver := "127.0.0.1"
+
+	if !dns {
+		ip, _ := Throw3(net.ParseCIDR(tunNetworkAddr))
+		ip = ip.To4()
+		ip[3]++
+		nameserver = ip.String()
+	}
 
 	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
 	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-resolv-"))
@@ -146,7 +180,7 @@ func setupResolvConf() {
 
 	tmpFile := tmpDir + "/resolv.conf"
 
-	Throw(os.WriteFile(tmpFile, []byte("nameserver "+ip.String()+"\n"), 0644))
+	Throw(os.WriteFile(tmpFile, []byte("nameserver "+nameserver+"\n"), 0644))
 	// Bind mount over /etc/resolv.conf.
 	Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
 }

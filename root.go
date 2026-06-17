@@ -43,6 +43,7 @@ Flags:
   -F address    socks5 proxy address to forward TCP/UDP packets
   -L mapping    local address mapping [target_host:]port:host:hostport[/proto]
   -B cidr       bypass CIDR — destinations in this network go direct, not via SOCKS
+  -D address    upstream DNS for the local IPv4-only resolver on 127.0.0.1:53
   -v            log verbose level (repeat for more)
   -q            suppress all log output
   -uid int      set uid of container process
