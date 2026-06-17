@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"math/rand"
 	"net"
+	"strconv"
 	"time"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -153,7 +153,7 @@ func (s *NetworkStack) setUDPHandler() {
 
 func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) {
 	defer localConn.Close()
-	address := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
+	address := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
 	dstConn := Throw2(s.socksTCPConn.DialContext(ctx, "tcp", address))
@@ -167,7 +167,7 @@ func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpoint
 
 func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) {
 	defer localConn.Close()
-	dstAddress := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
+	dstAddress := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 
 	s.log.Debug("handleUDP called", "dstAddr", dstAddress)
 

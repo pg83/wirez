@@ -62,6 +62,14 @@ Multiple `-F` flags create a proxy chain:
 wirez -F proxy1:1080 -F proxy2:1080 -- curl example.com
 ```
 
+### IPv6
+
+`-F`, `-L` and `-B` all accept IPv6. Literal IPv6 addresses must be bracketed (`[..]`) so the address and port stay unambiguous; `-B` takes a plain IPv6 CIDR:
+
+```
+wirez -F '[::1]:1080' -B 'fd00::/8' -L '53:[2606:4700:4700::1111]:53/udp' -- curl -6 example.com
+```
+
 ### Flags
 
 | Flag | Description |

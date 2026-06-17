@@ -366,7 +366,7 @@ func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string
 	host, port := Throw3(net.SplitHostPort(fromAddress))
 	Throw2(strconv.ParseUint(port, 10, 16))
 
-	if host == "" || host == "0.0.0.0" {
+	if host == "" || host == "0.0.0.0" || host == "::" {
 		fromAddress = port
 	}
 
