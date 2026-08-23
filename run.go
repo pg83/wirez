@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"errors"
@@ -64,9 +65,13 @@ func runRun(log *slog.Logger, args []string) {
 
 	parentFd, childFd := newUnixSocketPair()
 	defer unix.Close(parentFd)
-	defer unix.Close(childFd)
+	defer func() {
+		if childFd >= 0 {
+			_ = unix.Close(childFd)
+		}
+	}()
 
-	privileged := os.Geteuid() == 0
+	privileged := isInitialUserNamespaceRoot()
 
 	cmdArgs := fs.Args()
 	proc := exec.Command("/proc/self/exe", append([]string{"runc",
@@ -95,6 +100,8 @@ func runRun(log *slog.Logger, args []string) {
 	}
 
 	Throw(proc.Start())
+	Throw(unix.Close(childFd))
+	childFd = -1
 
 	parentConn := newParentUnixSocketConn(parentFd)
 
@@ -192,6 +199,10 @@ func (c *parentUnixSocketConn) ReceiveFds() []int {
 	_, oobn, _, _, err := unix.Recvmsg(c.socketFd, nil, b, 0)
 	Throw(err)
 
+	if oobn == 0 {
+		ThrowFmt("wirez child exited before sending network file descriptors")
+	}
+
 	// parse socket control message (only the bytes actually received)
 	cmsgs := Throw2(unix.ParseSocketControlMessage(b[:oobn]))
 	fds := Throw2(unix.ParseUnixRights(&cmsgs[0]))
@@ -201,6 +212,31 @@ func (c *parentUnixSocketConn) ReceiveFds() []int {
 	}
 
 	return fds
+}
+
+func isInitialUserNamespaceRoot() bool {
+	if os.Geteuid() != 0 {
+		return false
+	}
+
+	data, err := os.ReadFile("/proc/self/uid_map")
+
+	if err != nil {
+		return false
+	}
+
+	fields := strings.Fields(string(data))
+
+	if len(fields) < 3 {
+		return false
+	}
+
+	containerID, err1 := strconv.ParseUint(fields[0], 10, 64)
+	hostID, err2 := strconv.ParseUint(fields[1], 10, 64)
+	size, err3 := strconv.ParseUint(fields[2], 10, 64)
+
+	return err1 == nil && err2 == nil && err3 == nil &&
+		containerID == 0 && hostID == 0 && size > 1
 }
 
 func (c *parentUnixSocketConn) ReceiveMTU() uint32 {
