@@ -637,28 +637,18 @@ def reexec_in_netns(setup=(), mount=False):
     # the host's (setup commands run as root in it)
     namespaces = ["-n", "-m"] if mount else ["-n"]
     if real_root():
-        # Real root needs no user namespace for the setup, and must not run
-        # the test in one: root inside a user namespace has no CAP_DAC_OVERRIDE
-        # over the host's files. The test then runs as the checkout's owner,
-        # which also keeps wirez on the rootless path these tests are about;
-        # the temp dir and the coverage dir become its own.
-        owner = os.stat(__file__)
-        handover = " && ".join([
-            'TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/asuser.XXXXXX")',
-            f'chown {owner.st_uid}:{owner.st_gid} "$TMPDIR"',
-            "export TMPDIR",
-            'HOME="$TMPDIR"',
-            "export HOME",
-            f'if [ -n "$GOCOVERDIR" ]; then chown {owner.st_uid}:{owner.st_gid} "$GOCOVERDIR"; fi',
-        ])
-        drop = shlex.join(["setpriv", f"--reuid={owner.st_uid}", f"--regid={owner.st_gid}", "--clear-groups"])
+        # Real root sets the namespace up and runs the test as it is: no user
+        # namespace (root inside one has no CAP_DAC_OVERRIDE over the host's
+        # files) and no dropping of privileges. wirez then takes its
+        # privileged path here; the rootless one is what an ordinary user
+        # running this same suite covers.
+        drop = "exec"
         flags = namespaces
     else:
-        handover = "true"
-        drop = shlex.join(["unshare", "-U", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"])
+        drop = "exec " + shlex.join(["unshare", "-U", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"])
         flags = ["-r", *namespaces]
     result = subprocess.run(
-        ["unshare", *flags, "sh", "-c", f'{prelude} && {handover} && exec {drop} "$@"', "sh", sys.executable, *sys.argv],
+        ["unshare", *flags, "sh", "-c", f'{prelude} && {drop} "$@"', "sh", sys.executable, *sys.argv],
         env=env, check=False,
     )
     sys.exit(result.returncode)
