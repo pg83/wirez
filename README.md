@@ -1,6 +1,7 @@
 # wirez
 
 [![CI](https://github.com/pg83/wirez/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pg83/wirez/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/pg83/wirez/branch/main/graph/badge.svg)](https://app.codecov.io/gh/pg83/wirez)
 [![Go version](https://img.shields.io/github/go-mod/go-version/pg83/wirez)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -86,6 +87,7 @@ nix develop          # Go, the build runner's Python and every program the tests
 ./build              # .build/bin/wirez, published as ./wirez
 ./build test         # gofmt, go vet, unit and end-to-end tests
 ./build -Drace test
+./build -Dcoverage coverage   # .build/coverage.out from the instrumented binary
 ```
 
 `flake.nix` provides the dev shell; without it, `build` needs Go and Python 3.10+ on `PATH`, and the tests skip the programs they cannot find. The tests are `tst/test_*.py`, one build node each (`./build it_ssh`): every one runs the real binary, most of them with real programs (curl over HTTP/1.1, 2 and 3, an HTTP/2 stream that trickles in over seconds, WebSocket frames around a long pause, sshd, scp, rsync, git, iperf3, dig, DNS over TLS, mutual TLS, real SOCKS5 and HTTP proxies, a static busybox) against real servers in a private network namespace where the servers sit on `192.0.2.1`, with some on a lossy link. They need `/dev/net/tun` and unprivileged user namespaces and skip otherwise; `WIREZ_TEST_CONTAINER_REQUIRED=1` (CI sets it) makes that a failure.

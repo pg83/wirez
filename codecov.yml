@@ -1,0 +1,27 @@
+codecov:
+  branch: main
+
+coverage:
+  precision: 2
+  round: down
+  range: "50...90"
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%
+        informational: true
+    patch: off
+
+comment:
+  layout: "reach, diff, files"
+  require_changes: false
+
+# Go profiles name files by import path.
+fixes:
+  - "github.com/pg83/wirez/::"
+
+ignore:
+  - "tst/**/*"
+  - "dev/**/*"
+  - "**/*_test.go"

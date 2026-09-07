@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   test:
@@ -45,3 +46,36 @@ jobs:
         run: |
           nix --extra-experimental-features 'nix-command flakes' \
             develop -c ./build -j "$(nproc)" -Drace test
+
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          enable_kvm: false
+
+      - name: Allow unprivileged user namespaces for the container tests
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Run the tests against the instrumented binary
+        env:
+          WIREZ_TEST_CONTAINER_REQUIRED: "1"
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' \
+            develop -c ./build -j "$(nproc)" -Dcoverage coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true
+          files: .build/coverage.out
+          disable_search: true
+          fail_ci_if_error: true
+          verbose: true
