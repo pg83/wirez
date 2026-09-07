@@ -96,4 +96,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md): AI-assisted work with a human in the loo
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+wirez is a fork of [v-byte-cpu/wirez](https://github.com/v-byte-cpu/wirez) and stays under its MIT license, see [LICENSE](LICENSE).
