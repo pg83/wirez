@@ -68,21 +68,34 @@ def parse_question(msg):
     return ident, flags, name, qtype
 
 
-def build_answer(query, ips, truncated=False):
-    """Answers the query with the given addresses (A or AAAA by address family)."""
+TYPE_CNAME = 5
+
+
+def build_answer(query, ips, truncated=False, cname=None):
+    """Answers the query with the given addresses (A or AAAA by address
+    family); with cname, the name is an alias of cname and the addresses
+    belong to cname, as a real resolver would answer."""
     ident, _, name, qtype = parse_question(query)
     flags = FLAG_RESPONSE | FLAG_RD | FLAG_RA
     if truncated:
         flags |= FLAG_TRUNCATED
     question = encode_name(name) + struct.pack("!HH", qtype, CLASS_IN)
     answers = b""
+    count = 0
+    owner = b"\xc0\x0c"
+    if cname:
+        target = encode_name(cname)
+        answers += owner + struct.pack("!HHIH", TYPE_CNAME, CLASS_IN, 60, len(target)) + target
+        owner = target
+        count += 1
     for ip in ips:
         if ":" in ip:
             rtype, rdata = TYPE_AAAA, socket.inet_pton(socket.AF_INET6, ip)
         else:
             rtype, rdata = TYPE_A, socket.inet_pton(socket.AF_INET, ip)
-        answers += b"\xc0\x0c" + struct.pack("!HHIH", rtype, CLASS_IN, 60, len(rdata)) + rdata
-    header = struct.pack("!HHHHHH", ident, flags, 1, len(ips), 0, 0)
+        answers += owner + struct.pack("!HHIH", rtype, CLASS_IN, 60, len(rdata)) + rdata
+        count += 1
+    header = struct.pack("!HHHHHH", ident, flags, 1, count, 0, 0)
     return header + question + answers
 
 

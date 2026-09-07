@@ -65,6 +65,19 @@ class DnsTest(lib.ContainerTest):
                 out = lib.in_container(self.flags("-6", "-B", "2001:db8::/32", dns=dns), "dns", "wirez.test", "AAAA")
                 self.assertTrue(out.startswith("error:"), out)
 
+    def test_aaaa_policy_looks_past_cname_records(self):
+        dns = lib.DnsServer(RECORDS, cnames={"alias.test.": "wirez.test."})
+        flags = self.flags("-6", "-B", "2001:db8::/32", dns=dns)
+        self.assertEqual(lib.in_container(flags, "dns", "alias.test", "AAAA"), "2001:db8::10")
+        self.assertEqual(lib.in_container(flags, "dns", "alias.test"), "192.0.2.1")
+
+    def test_queries_it_cannot_parse_are_forwarded_verbatim(self):
+        # the fake upstream bounces what it cannot parse, so the size of the
+        # reply shows the resolver passed the bytes through untouched
+        for raw in ("01", "4242010000000000000000000000"):
+            with self.subTest(raw=raw):
+                self.assertEqual(lib.in_container(self.flags(), "dns-send", raw), str(len(raw) // 2))
+
     def test_bare_upstream_addresses_imply_port_53(self):
         # nothing is resolved here, the log shows how -D was understood
         result = lib.in_container(

@@ -518,11 +518,14 @@ class DnsServer:
     address lists; UDP answers carry the TC bit and no records when
     truncate_udp is set. Every query is recorded as (name, qtype, transport)."""
 
-    def __init__(self, records, truncate_udp=False, host="127.0.0.1", garbage=None):
+    def __init__(self, records, truncate_udp=False, host="127.0.0.1", garbage=None, cnames=None):
         self.records = records
         self.truncate_udp = truncate_udp
         # when set, every answer is these bytes instead of a DNS message
         self.garbage = garbage
+        # aliases: a query for the key is answered with a CNAME to the value
+        # followed by the value's records
+        self.cnames = cnames or {}
         self.lock = threading.Lock()
         self.queries = []
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -537,16 +540,20 @@ class DnsServer:
         threading.Thread(target=self._serve_tcp, daemon=True).start()
 
     def answer(self, query, transport):
-        _, _, name, qtype = dnswire.parse_question(query)
+        try:
+            _, _, name, qtype = dnswire.parse_question(query)
+        except (IndexError, ValueError, struct.error):
+            return query  # not a DNS message: bounce it back, the test looks at that
         with self.lock:
             self.queries.append((name, qtype, transport))
         if self.garbage is not None:
             return self.garbage
-        ips = [ip for ip in self.records.get(name, [])
+        cname = self.cnames.get(name)
+        ips = [ip for ip in self.records.get(cname or name, [])
                if (":" in ip) == (qtype == dnswire.TYPE_AAAA)]
         if transport == "udp" and self.truncate_udp:
             return dnswire.build_answer(query, [], truncated=True)
-        return dnswire.build_answer(query, ips)
+        return dnswire.build_answer(query, ips, cname=cname)
 
     def _serve_udp(self):
         while True:

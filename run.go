@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"errors"
 	"log/slog"
 
 	"golang.org/x/sys/unix"
@@ -99,25 +98,22 @@ func runRun(log *slog.Logger, args []string) {
 	nat64 := parseNAT64(f.nat64Prefix)
 	useDNS := len(dnsUpstreams) > 0
 
-	parentFd, childFd := newUnixSocketPair()
-	parentConn := newParentUnixSocketConn(parentFd)
+	parentConn, childFile := newControlSocket()
 	defer parentConn.Close()
-	defer func() {
-		if childFd >= 0 {
-			_ = unix.Close(childFd)
-		}
-	}()
+	defer childFile.Close()
 
 	privileged := isInitialUserNamespaceRoot()
 
 	cmdArgs := fs.Args()
 	proc := exec.Command("/proc/self/exe", append([]string{"runc",
-		"-unix-fd", strconv.Itoa(childFd), fmt.Sprintf("-privileged=%t", privileged),
+		"-unix-fd", "3", fmt.Sprintf("-privileged=%t", privileged),
 		fmt.Sprintf("-dns=%t", useDNS), fmt.Sprintf("-ipv6=%t", f.ipv6), "-hostname", f.hostname,
 		"-uid", strconv.Itoa(f.uid), "-gid", strconv.Itoa(f.gid), "--"}, cmdArgs...)...)
 	proc.Stdin = os.Stdin
 	proc.Stdout = os.Stdout
 	proc.Stderr = os.Stderr
+	// the child's end of the control socket, as descriptor 3
+	proc.ExtraFiles = []*os.File{childFile}
 
 	// The container is useless without this process driving its TUN, so it
 	// must not outlive it.
@@ -141,10 +137,16 @@ func runRun(log *slog.Logger, args []string) {
 	}
 
 	Throw(proc.Start())
-	Throw(unix.Close(childFd))
-	childFd = -1
+	// only the child holds its end now, so its exit shows up as EOF
+	Throw(childFile.Close())
 
-	fds := parentConn.ReceiveFds()
+	wantFds := 1
+
+	if useDNS {
+		wantFds = 3
+	}
+
+	fds := parentConn.ReceiveFds(wantFds)
 
 	tunFd := fds[0]
 	defer unix.Close(tunFd)
@@ -152,10 +154,6 @@ func runRun(log *slog.Logger, args []string) {
 	dnsUDPFd, dnsTCPFd := -1, -1
 
 	if useDNS {
-		if len(fds) < 3 {
-			ThrowFmt("dns socket fds not received")
-		}
-
 		dnsUDPFd, dnsTCPFd = fds[1], fds[2]
 	}
 
@@ -235,23 +233,13 @@ func buildProxyChain(log *slog.Logger, proxies []*ProxyAddr) (tcpConn, udpConn C
 	return tcpConn, udpConn
 }
 
-func newUnixSocketPair() (parentFd, childFd int) {
-	fds := Throw2(unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0))
+// newControlSocket makes the socket pair the two halves talk over. Both ends
+// are close-on-exec: the container gets its end as an extra file, nothing
+// else inherits either.
+func newControlSocket() (*parentUnixSocketConn, *os.File) {
+	fds := Throw2(unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0))
 
-	parentFd = fds[0]
-	childFd = fds[1]
-
-	// set clo_exec flag on parent file descriptor
-	_, err := unix.FcntlInt(uintptr(parentFd), unix.F_SETFD, unix.FD_CLOEXEC)
-
-	if err != nil {
-		err = errors.Join(err, unix.Close(parentFd))
-		err = errors.Join(err, unix.Close(childFd))
-
-		Throw(err)
-	}
-
-	return
+	return newParentUnixSocketConn(fds[0]), os.NewFile(uintptr(fds[1]), "childPipe")
 }
 
 // parentUnixSocketConn is the parent's end of the control socket. The
@@ -274,9 +262,10 @@ func (c *parentUnixSocketConn) Close() error {
 	return c.socketFile.Close()
 }
 
-func (c *parentUnixSocketConn) ReceiveFds() []int {
-	// receive socket control message (room for several fds)
-	b := make([]byte, unix.CmsgSpace(4*8))
+// ReceiveFds takes the descriptors the container sends over the control
+// socket; a container that died first sends nothing.
+func (c *parentUnixSocketConn) ReceiveFds(want int) []int {
+	b := make([]byte, unix.CmsgSpace(4*want))
 	_, oobn, _, _, err := unix.Recvmsg(c.socketFd, nil, b, 0)
 	Throw(err)
 
@@ -284,12 +273,11 @@ func (c *parentUnixSocketConn) ReceiveFds() []int {
 		ThrowFmt("wirez child exited before sending network file descriptors")
 	}
 
-	// parse socket control message (only the bytes actually received)
 	cmsgs := Throw2(unix.ParseSocketControlMessage(b[:oobn]))
 	fds := Throw2(unix.ParseUnixRights(&cmsgs[0]))
 
-	if len(fds) == 0 {
-		ThrowFmt("received fds slice is empty")
+	if len(fds) != want {
+		ThrowFmt("received %d network file descriptors, want %d", len(fds), want)
 	}
 
 	return fds

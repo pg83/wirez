@@ -37,8 +37,12 @@ jobs:
         env:
           WIREZ_TEST_CONTAINER_REQUIRED: "1"
         run: |
-          nix --extra-experimental-features 'nix-command flakes' \
-            develop -c ./build -j "$(nproc)" test
+          set -o pipefail
+          nix --extra-experimental-features 'nix-command flakes' develop -c ./build -j "$(nproc)" test 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Report failure
+        if: failure()
+        run: python3 dev/ci_report.py --log "$RUNNER_TEMP/build.log" --title "Build and test"
 
       - name: Test with the race detector
         env:
@@ -68,8 +72,12 @@ jobs:
         env:
           WIREZ_TEST_CONTAINER_REQUIRED: "1"
         run: |
-          nix --extra-experimental-features 'nix-command flakes' \
-            develop -c ./build -j "$(nproc)" -Dcoverage coverage
+          set -o pipefail
+          nix --extra-experimental-features 'nix-command flakes' develop -c ./build -j "$(nproc)" -Dcoverage coverage 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Report failure
+        if: failure()
+        run: python3 dev/ci_report.py --log "$RUNNER_TEMP/build.log" --title "Coverage"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -103,9 +111,12 @@ jobs:
         env:
           WIREZ_TEST_CONTAINER_REQUIRED: "1"
         run: |
-          sudo --preserve-env=PATH,WIREZ_TEST_CONTAINER_REQUIRED \
-            nix --extra-experimental-features 'nix-command flakes' \
-            develop -c ./build -B .build-root -j "$(nproc)" -Dcoverage coverage
+          set -o pipefail
+          sudo --preserve-env=PATH,WIREZ_TEST_CONTAINER_REQUIRED nix --extra-experimental-features 'nix-command flakes' develop -c ./build -B .build-root -j "$(nproc)" -Dcoverage coverage 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Report failure
+        if: failure()
+        run: python3 dev/ci_report.py --log "$RUNNER_TEMP/build.log" --title "Coverage as root"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0

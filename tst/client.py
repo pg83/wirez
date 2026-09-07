@@ -193,6 +193,19 @@ def mode_dns_raw(name, qtype):
     )
 
 
+def mode_dns_send(hexdata):
+    """Send raw bytes to the local resolver; print the size of what comes back."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(TIMEOUT)
+        sock.sendto(bytes.fromhex(hexdata), ("127.0.0.1", 53))
+        try:
+            data, _ = sock.recvfrom(65536)
+        except socket.timeout:
+            sys.stdout.write("timeout")
+            return
+        sys.stdout.write(str(len(data)))
+
+
 def recv_exact(sock, size):
     data = b""
     while len(data) < size:
@@ -308,6 +321,7 @@ MODES = {
     "dns": mode_dns,
     "dns-tcp": mode_dns_tcp,
     "dns-raw": mode_dns_raw,
+    "dns-send": mode_dns_send,
     "refused": mode_refused,
     "idle": mode_idle,
     "ping": mode_ping,

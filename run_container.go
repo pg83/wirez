@@ -307,8 +307,14 @@ func hostsContent(hostname, hostHosts string) string {
 	return hostHosts + "\n" + own
 }
 
+// tunQueueLength replaces the TUN default of 500 packets: a burst from the
+// container waits there while the userspace stack is busy, and dropping it
+// at the device is the one loss wirez cannot recover from.
+const tunQueueLength = 10000
+
 func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {
 	dev := Throw2(netlink.LinkByName(device))
+	Throw(netlink.LinkSetTxQLen(dev, tunQueueLength))
 	Throw(netlink.LinkSetUp(dev))
 
 	addr := Throw2(netlink.ParseAddr(networkAddr))

@@ -22,7 +22,12 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-const defaultNICID tcpip.NICID = 1
+const (
+	defaultNICID tcpip.NICID = 1
+	// udpEndpointReceiveBuffer is what a UDP flow may queue before its relay
+	// is ready (gVisor's maximum).
+	udpEndpointReceiveBuffer = 4 << 20
+)
 
 // NetworkStackOptions configures NewNetworkStack.
 type NetworkStackOptions struct {
@@ -154,6 +159,10 @@ func (s *NetworkStack) setUDPHandler() {
 		s.opts.Log.Debug("udp: received request",
 			"localAddress", id.LocalAddress, "localPort", id.LocalPort,
 			"fromAddress", id.RemoteAddress, "fromPort", id.RemotePort)
+
+		// The endpoint has to exist before this returns: the next datagram
+		// of the flow is right behind, and without an endpoint it would
+		// land here again.
 		ep, err := r.CreateEndpoint(&wq)
 
 		if err != nil {
@@ -161,6 +170,11 @@ func (s *NetworkStack) setUDPHandler() {
 
 			return true
 		}
+
+		// Datagrams keep arriving while the flow's association is set up;
+		// a resolver's or QUIC's opening burst must not overflow the
+		// default 32 KiB queue meanwhile.
+		ep.SocketOptions().SetReceiveBufferSize(udpEndpointReceiveBuffer, true)
 
 		go func() {
 			Try(func() {
@@ -181,26 +195,26 @@ func (s *NetworkStack) setUDPHandler() {
 // custom handler. ICMPv6 echo is answered by the stack itself.
 func (s *NetworkStack) setICMPHandler() {
 	s.SetTransportProtocolHandler(header.ICMPv4ProtocolNumber, func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
-		return s.replyEcho(id, pkt)
+		request := header.ICMPv4(pkt.TransportHeader().Slice())
+
+		if len(request) < header.ICMPv4MinimumSize || request.Type() != header.ICMPv4Echo {
+			return false
+		}
+
+		Try(func() {
+			s.replyEcho(id, request, pkt.Data().AsRange().ToSlice())
+		}).Catch(func(exc *Exception) {
+			s.opts.Log.Debug("icmp: echo reply failed", "to", id.RemoteAddress, "err", exc)
+		})
+
+		return true
 	})
 }
 
-func (s *NetworkStack) replyEcho(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
-	request := header.ICMPv4(pkt.TransportHeader().Slice())
-
-	if len(request) < header.ICMPv4MinimumSize || request.Type() != header.ICMPv4Echo {
-		return false
-	}
-
-	payload := pkt.Data().AsRange().ToSlice()
+// replyEcho answers one echo request with its payload.
+func (s *NetworkStack) replyEcho(id stack.TransportEndpointID, request header.ICMPv4, payload []byte) {
 	route, err := s.FindRoute(defaultNICID, id.LocalAddress, id.RemoteAddress, ipv4.ProtocolNumber, false)
-
-	if err != nil {
-		s.opts.Log.Debug("icmp: no route for echo reply", "to", id.RemoteAddress, "err", err)
-
-		return true
-	}
-
+	throwTCPIP(err)
 	defer route.Release()
 
 	reply := stack.NewPacketBuffer(stack.PacketBufferOptions{
@@ -216,12 +230,7 @@ func (s *NetworkStack) replyEcho(id stack.TransportEndpointID, pkt *stack.Packet
 	icmpHdr.SetChecksum(header.ICMPv4Checksum(icmpHdr, reply.Data().Checksum()))
 
 	params := stack.NetworkHeaderParams{Protocol: header.ICMPv4ProtocolNumber, TTL: route.DefaultTTL()}
-
-	if err := route.WritePacket(params, reply); err != nil {
-		s.opts.Log.Debug("icmp: echo reply failed", "err", err)
-	}
-
-	return true
+	throwTCPIP(route.WritePacket(params, reply))
 }
 
 // handleTCP dials the destination before completing the client's handshake,
@@ -250,14 +259,9 @@ func (s *NetworkStack) handleTCP(r *tcp.ForwarderRequest, id *stack.TransportEnd
 	var wq waiter.Queue
 
 	ep, tcpErr := r.CreateEndpoint(&wq)
-
-	if tcpErr != nil {
-		// prevent potential half-open TCP connection leak.
-		r.Complete(true)
-		ThrowFmt("%s", tcpErr)
-	}
-
-	r.Complete(false)
+	// a failed endpoint is refused (RST), never left half-open
+	r.Complete(tcpErr != nil)
+	throwTCPIP(tcpErr)
 
 	// Keepalive notices a vanished peer without an idle timeout.
 	ep.SocketOptions().SetKeepAlive(true)

@@ -18,18 +18,16 @@ func NewTimeoutConn(conn net.Conn, ioTimeout time.Duration) *TimeoutConn {
 	return &TimeoutConn{Conn: conn, IOTimeout: ioTimeout}
 }
 
-func (c *TimeoutConn) Read(b []byte) (n int, err error) {
-	if err = c.SetDeadline(time.Now().Add(c.IOTimeout)); err != nil {
-		return
-	}
+// Read and Write arm the deadline first. SetDeadline only fails on a closed
+// connection, and the Read or Write that follows reports that itself.
+func (c *TimeoutConn) Read(b []byte) (int, error) {
+	_ = c.SetDeadline(time.Now().Add(c.IOTimeout))
 
 	return c.Conn.Read(b)
 }
 
-func (c *TimeoutConn) Write(b []byte) (n int, err error) {
-	if err = c.SetDeadline(time.Now().Add(c.IOTimeout)); err != nil {
-		return
-	}
+func (c *TimeoutConn) Write(b []byte) (int, error) {
+	_ = c.SetDeadline(time.Now().Add(c.IOTimeout))
 
 	return c.Conn.Write(b)
 }
