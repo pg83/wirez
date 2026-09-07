@@ -7,10 +7,10 @@ import lib
 
 
 class BadSocks5ProxyTest(lib.ContainerTest):
-    def assert_refused(self, proxy, message, flags=()):
+    def assert_refused(self, proxy, *messages, flags=()):
         result = lib.in_container(["-F", proxy.addr, "-v", *flags], "refused", "192.0.2.1:80", check=False)
         self.assertEqual(result.stdout, "refused")
-        self.assertIn(message, result.stderr)
+        self.assertTrue(any(m in result.stderr for m in messages), f"none of {messages} in:\n{result.stderr}")
 
     def test_wrong_version(self):
         self.assert_refused(lib.Socks5Server(misbehave="bad_version"), "socks5: bad version 4")
@@ -19,7 +19,8 @@ class BadSocks5ProxyTest(lib.ContainerTest):
         self.assert_refused(lib.Socks5Server(misbehave="no_method"), "no acceptable authentication method")
 
     def test_hang_up_after_method_selection(self):
-        self.assert_refused(lib.Socks5Server(misbehave="close_after_methods"), "EOF")
+        # EOF when the proxy had read the request, a reset when it had not
+        self.assert_refused(lib.Socks5Server(misbehave="close_after_methods"), "EOF", "connection reset by peer")
 
     def test_reply_with_wrong_version(self):
         self.assert_refused(lib.Socks5Server(misbehave="reply_bad_version"), "socks5: bad version 4")
@@ -58,16 +59,16 @@ class BadUdpRelayTest(lib.ContainerTest):
 
 
 class BadHttpProxyTest(lib.ContainerTest):
-    def assert_refused(self, proxy, message):
+    def assert_refused(self, proxy, *messages):
         result = lib.in_container(["-F", f"http://{proxy.addr}", "-v"], "refused", "192.0.2.1:80", check=False)
         self.assertEqual(result.stdout, "refused")
-        self.assertIn(message, result.stderr)
+        self.assertTrue(any(m in result.stderr for m in messages), f"none of {messages} in:\n{result.stderr}")
 
     def test_malformed_status_line(self):
         self.assert_refused(lib.HttpConnectProxy(misbehave="malformed_status"), "malformed response")
 
     def test_hang_up_without_answering(self):
-        self.assert_refused(lib.HttpConnectProxy(misbehave="close"), "EOF")
+        self.assert_refused(lib.HttpConnectProxy(misbehave="close"), "EOF", "connection reset by peer")
 
 
 if __name__ == "__main__":
