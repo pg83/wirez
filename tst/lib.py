@@ -206,10 +206,10 @@ class SilentServer(TcpServer):
 
 class UdpEchoServer:
     def __init__(self, host="127.0.0.1"):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((host, 0))
         self.port = self.sock.getsockname()[1]
-        self.addr = f"127.0.0.1:{self.port}"
+        self.addr = format_addr(host, self.port)
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self):
@@ -536,3 +536,29 @@ def closed_tcp_port():
     port = sock.getsockname()[1]
     sock.close()
     return f"127.0.0.1:{port}"
+
+
+def reexec_in_netns(setup=()):
+    """Re-runs the current test script as root in a fresh user and network
+    namespace, with loopback up and the given `ip` argument lists applied, so
+    a test can give the host any address or route it needs (a NAT64 prefix,
+    a LAN to bypass to) without privileges outside. Returns in the inner
+    process; the outer one exits with the inner's status. Whether the
+    container can be created at all is decided outside, as skip or failure."""
+    if os.environ.get("WIREZ_TEST_NETNS"):
+        for argv in setup:
+            subprocess.run(["ip", *argv], check=True)
+        return
+    problem = container_support_problem()
+    if problem is not None:
+        if REQUIRED:
+            print(problem, file=sys.stderr)
+            sys.exit(1)
+        print(f"skipped: {problem}", file=sys.stderr)
+        sys.exit(0)
+    env = dict(os.environ, WIREZ_TEST_NETNS="1")
+    result = subprocess.run(
+        ["unshare", "-r", "-n", "sh", "-c", 'ip link set lo up && exec "$@"', "sh", sys.executable, *sys.argv],
+        env=env, check=False,
+    )
+    sys.exit(result.returncode)
