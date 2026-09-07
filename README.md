@@ -1,5 +1,9 @@
 # wirez
 
+[![CI](https://github.com/pg83/wirez/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pg83/wirez/actions/workflows/ci.yml)
+[![Go version](https://img.shields.io/github/go-mod/go-version/pg83/wirez)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **wirez** redirects all TCP/UDP traffic from any given program to a SOCKS5 (or HTTP CONNECT) proxy, blocking other IP traffic (SCTP, ICMP other than ping, etc).
 
 Unlike [tsocks](https://linux.die.net/man/8/tsocks), [proxychains](http://proxychains.sourceforge.net/) or
@@ -143,6 +147,10 @@ wirez -F '[::1]:1080' -B 'fd00::/8' -L '53:[2606:4700:4700::1111]:53/udp' -- cur
 | `-q` | Suppress all log output |
 | `-uid int` | Set UID of container process |
 | `-gid int` | Set GID of container process |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): AI-assisted contributions with a human in the loop are preferred, unreviewed AI output is not accepted.
 
 ## License
 
