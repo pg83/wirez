@@ -39,7 +39,7 @@ func TestAAAAQueryIsBlockedLocally(t *testing.T) {
 
 	// upstream is unreachable on purpose: an AAAA query must be answered
 	// locally without forwarding.
-	resp := resolveIPv4Only(discardLogger(), q, "203.0.113.1:53")
+	resp := resolveDNS(discardLogger(), q, "203.0.113.1:53", &dnsPolicy{})
 
 	var p dnsmessage.Parser
 

@@ -276,24 +276,32 @@ type localForwardingConnector struct {
 	socksConnector  Connector
 	nat             AddressMapper
 	bypass          []*net.IPNet
+	nat64           *net.IPNet
 }
 
-func NewLocalForwardingConnector(directConnector Connector, socksConnector Connector, nat AddressMapper, bypass []*net.IPNet) Connector {
+func NewLocalForwardingConnector(directConnector Connector, socksConnector Connector, nat AddressMapper, bypass []*net.IPNet, nat64 *net.IPNet) Connector {
 	return &localForwardingConnector{
 		directConnector: directConnector,
 		socksConnector:  socksConnector,
 		nat:             nat,
 		bypass:          bypass,
+		nat64:           nat64,
 	}
 }
 
+// DialContext picks the route for a destination: explicit -L mappings win,
+// then -B bypass networks go direct (through NAT64 on an IPv6-only host),
+// everything else goes to SOCKS. A NAT64-synthesized IPv6 destination is
+// unmapped to its embedded IPv4 first, so the IPv4 rules govern it.
 func (c *localForwardingConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	if c.matchBypass(address) {
-		return c.directConnector.DialContext(ctx, network, address)
-	}
+	address = nat64Unmap(c.nat64, address)
 
 	if newAddress, ok := c.nat.MapAddress(network, address); ok {
 		return c.directConnector.DialContext(ctx, network, newAddress)
+	}
+
+	if c.matchBypass(address) {
+		return c.directConnector.DialContext(ctx, network, nat64Map(c.nat64, address))
 	}
 
 	return c.socksConnector.DialContext(ctx, network, address)
@@ -319,6 +327,54 @@ func (c *localForwardingConnector) matchBypass(address string) bool {
 	}
 
 	return false
+}
+
+// nat64Unmap turns a destination inside the NAT64 prefix back into the IPv4
+// address embedded in its low 32 bits; other destinations pass through.
+func nat64Unmap(prefix *net.IPNet, address string) string {
+	if prefix == nil {
+		return address
+	}
+
+	host, port, err := net.SplitHostPort(address)
+
+	if err != nil {
+		return address
+	}
+
+	ip := net.ParseIP(host)
+
+	if ip == nil || ip.To4() != nil || !prefix.Contains(ip) {
+		return address
+	}
+
+	return net.JoinHostPort(net.IP(ip[12:16]).String(), port)
+}
+
+// nat64Map embeds an IPv4 destination into the NAT64 prefix so an IPv6-only
+// host can dial it; IPv6 destinations pass through.
+func nat64Map(prefix *net.IPNet, address string) string {
+	if prefix == nil {
+		return address
+	}
+
+	host, port, err := net.SplitHostPort(address)
+
+	if err != nil {
+		return address
+	}
+
+	ip4 := net.ParseIP(host).To4()
+
+	if ip4 == nil {
+		return address
+	}
+
+	ip := make(net.IP, net.IPv6len)
+	copy(ip, prefix.IP.To16())
+	copy(ip[12:], ip4)
+
+	return net.JoinHostPort(ip.String(), port)
 }
 
 type AddressMapper interface {

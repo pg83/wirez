@@ -60,6 +60,23 @@ func parseBypassNets(cidrs []string) []*net.IPNet {
 	return nets
 }
 
+// parseNAT64 parses the -nat64 prefix; only the well-known /96 layout, with
+// the IPv4 address in the low 32 bits, is supported.
+func parseNAT64(s string) *net.IPNet {
+	if s == "" {
+		return nil
+	}
+
+	_, n := Throw3(net.ParseCIDR(s))
+	ones, bits := n.Mask.Size()
+
+	if bits != 128 || ones != 96 {
+		ThrowFmt("invalid -nat64 prefix %q: must be an IPv6 /96", s)
+	}
+
+	return n
+}
+
 func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 	parts := strings.Split(mapping, "/")
 

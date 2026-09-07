@@ -2,11 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
-	"math/rand"
-	"net"
-	"strconv"
-	"time"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -17,6 +12,11 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
+	"log/slog"
+	"math/rand"
+	"net"
+	"strconv"
+	"time"
 )
 
 type NetworkStack struct {
@@ -30,7 +30,7 @@ type NetworkStack struct {
 	ConnectTimeout time.Duration
 }
 
-func NewNetworkStack(log *slog.Logger, fd int, mtu uint32, tunNetworkAddr string,
+func NewNetworkStack(log *slog.Logger, fd int, mtu uint32, tunNetworkAddr string, tunNetworkAddr6 string,
 	socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) *NetworkStack {
 	s := &NetworkStack{
 		log:            log,
@@ -74,6 +74,10 @@ func NewNetworkStack(log *slog.Logger, fd int, mtu uint32, tunNetworkAddr string
 
 	s.setupRouting(defaultNICID, tunNetworkAddr)
 
+	if tunNetworkAddr6 != "" {
+		s.setupRouting(defaultNICID, tunNetworkAddr6)
+	}
+
 	s.setTCPHandler()
 	s.setUDPHandler()
 
@@ -82,7 +86,13 @@ func NewNetworkStack(log *slog.Logger, fd int, mtu uint32, tunNetworkAddr string
 
 func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
 	_, ipNet := Throw3(net.ParseCIDR(assignNet))
-	subnet := Throw2(tcpip.NewSubnet(tcpip.AddrFrom4Slice(ipNet.IP.To4()), tcpip.MaskFromBytes(ipNet.Mask)))
+	addr := tcpip.AddrFrom16Slice(ipNet.IP.To16())
+
+	if ip4 := ipNet.IP.To4(); ip4 != nil {
+		addr = tcpip.AddrFrom4Slice(ip4)
+	}
+
+	subnet := Throw2(tcpip.NewSubnet(addr, tcpip.MaskFromBytes(ipNet.Mask)))
 
 	rt := s.GetRouteTable()
 	rt = append(rt, tcpip.Route{
@@ -95,26 +105,14 @@ func (s *NetworkStack) setupRouting(nic tcpip.NICID, assignNet string) {
 
 func (s *NetworkStack) setTCPHandler() {
 	tcpForwarder := tcp.NewForwarder(s.Stack, 0, 2<<10, func(r *tcp.ForwarderRequest) {
-		var wq waiter.Queue
 		id := r.ID()
 		s.log.Debug("tcp: received request",
 			"localAddress", id.LocalAddress, "localPort", id.LocalPort,
 			"fromAddress", id.RemoteAddress, "fromPort", id.RemotePort)
-		ep, err := r.CreateEndpoint(&wq)
-
-		if err != nil {
-			s.log.Error("tcp: error", "err", err)
-			// prevent potential half-open TCP connection leak.
-			r.Complete(true)
-
-			return
-		}
-
-		r.Complete(false)
 
 		go func() {
 			Try(func() {
-				s.handleTCP(gonet.NewTCPConn(&wq, ep), &id)
+				s.handleTCP(r, &id)
 			}).Catch(func(exc *Exception) {
 				s.log.Error("tcp: error", "err", exc)
 			})
@@ -151,13 +149,40 @@ func (s *NetworkStack) setUDPHandler() {
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
 
-func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) {
-	defer localConn.Close()
+// handleTCP dials the destination before completing the client's handshake,
+// so a failed upstream dial is reported to the client as a refused connection
+// (RST to the SYN) instead of an accepted-then-reset one. That keeps
+// happy-eyeballs style fallbacks working: the client moves on to its next
+// address right away.
+func (s *NetworkStack) handleTCP(r *tcp.ForwarderRequest, id *stack.TransportEndpointID) {
 	address := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
-	dstConn := Throw2(s.socksTCPConn.DialContext(ctx, "tcp", address))
+
+	dstConn, err := s.socksTCPConn.DialContext(ctx, "tcp", address)
+
+	if err != nil {
+		r.Complete(true)
+		Throw(err)
+	}
+
 	defer dstConn.Close()
+
+	var wq waiter.Queue
+
+	ep, tcpErr := r.CreateEndpoint(&wq)
+
+	if tcpErr != nil {
+		// prevent potential half-open TCP connection leak.
+		r.Complete(true)
+		ThrowFmt("%s", tcpErr)
+	}
+
+	r.Complete(false)
+
+	localConn := net.Conn(gonet.NewTCPConn(&wq, ep))
+	defer localConn.Close()
+
 	localConn = NewTimeoutConn(localConn, s.TcpIOTimeout)
 	dstConn = NewTimeoutConn(dstConn, s.TcpIOTimeout)
 

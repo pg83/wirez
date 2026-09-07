@@ -36,18 +36,71 @@ func parseUpstreamDNS(s string) string {
 	return ""
 }
 
+// dnsPolicy decides which AAAA answers the container is allowed to see.
+// Without IPv6 on the TUN every AAAA query is answered NODATA. With IPv6 an
+// AAAA answer is kept only if at least one address in it is dialable directly
+// (falls into a -B network, possibly after NAT64 unmapping), because the
+// SOCKS chain is assumed to have no working IPv6.
+type dnsPolicy struct {
+	ipv6  bool
+	allow []*net.IPNet
+	nat64 *net.IPNet
+}
+
+func (p *dnsPolicy) allowsAAAA(resp []byte) bool {
+	if !p.ipv6 {
+		return false
+	}
+
+	var parser dnsmessage.Parser
+
+	if _, err := parser.Start(resp); err != nil {
+		return false
+	}
+
+	if err := parser.SkipAllQuestions(); err != nil {
+		return false
+	}
+
+	for {
+		rr, err := parser.Answer()
+
+		if err != nil {
+			return false
+		}
+
+		aaaa, ok := rr.Body.(*dnsmessage.AAAAResource)
+
+		if !ok {
+			continue
+		}
+
+		ip := net.IP(aaaa.AAAA[:])
+
+		if p.nat64 != nil && p.nat64.Contains(ip) {
+			ip = ip[12:16]
+		}
+
+		for _, n := range p.allow {
+			if n.Contains(ip) {
+				return true
+			}
+		}
+	}
+}
+
 // startDNSResolver takes ownership of a UDP socket fd (bound to 127.0.0.1:53
 // inside the container netns) and serves it from the host netns, so upstream
 // queries reach the real resolver directly, bypassing SOCKS.
-func startDNSResolver(log *slog.Logger, fd int, upstream string) {
+func startDNSResolver(log *slog.Logger, fd int, upstream string, policy *dnsPolicy) {
 	f := os.NewFile(uintptr(fd), "dns")
 	conn := Throw2(net.FilePacketConn(f))
 	Throw(f.Close())
 
-	go serveDNS(log, conn, upstream)
+	go serveDNS(log, conn, upstream, policy)
 }
 
-func serveDNS(log *slog.Logger, conn net.PacketConn, upstream string) {
+func serveDNS(log *slog.Logger, conn net.PacketConn, upstream string, policy *dnsPolicy) {
 	for {
 		buf := make([]byte, dnsBufferSize)
 		n, addr, err := conn.ReadFrom(buf)
@@ -66,7 +119,7 @@ func serveDNS(log *slog.Logger, conn net.PacketConn, upstream string) {
 
 		go func() {
 			Try(func() {
-				handleDNSQuery(log, conn, addr, query, upstream)
+				handleDNSQuery(log, conn, addr, query, upstream, policy)
 			}).Catch(func(exc *Exception) {
 				log.Error("dns: error", "err", exc)
 			})
@@ -74,16 +127,16 @@ func serveDNS(log *slog.Logger, conn net.PacketConn, upstream string) {
 	}
 }
 
-func handleDNSQuery(log *slog.Logger, conn net.PacketConn, addr net.Addr, query []byte, upstream string) {
-	resp := resolveIPv4Only(log, query, upstream)
+func handleDNSQuery(log *slog.Logger, conn net.PacketConn, addr net.Addr, query []byte, upstream string, policy *dnsPolicy) {
+	resp := resolveDNS(log, query, upstream, policy)
 
 	Throw2(conn.WriteTo(resp, addr))
 }
 
-// resolveIPv4Only answers AAAA queries locally with an empty NOERROR (NODATA)
-// so applications fall back to IPv4, and forwards everything else verbatim to
-// the upstream resolver.
-func resolveIPv4Only(log *slog.Logger, query []byte, upstream string) []byte {
+// resolveDNS forwards queries verbatim to the upstream resolver, except that
+// AAAA answers are replaced with an empty NOERROR (NODATA) whenever the policy
+// says the container could not reach them, so applications fall back to IPv4.
+func resolveDNS(log *slog.Logger, query []byte, upstream string, policy *dnsPolicy) []byte {
 	var parser dnsmessage.Parser
 
 	header, err := parser.Start(query)
@@ -100,13 +153,25 @@ func resolveIPv4Only(log *slog.Logger, query []byte, upstream string) []byte {
 		return forwardDNS(query, upstream)
 	}
 
-	if question.Type == dnsmessage.TypeAAAA {
+	if question.Type != dnsmessage.TypeAAAA {
+		return forwardDNS(query, upstream)
+	}
+
+	if !policy.ipv6 {
 		log.Debug("dns: blocking AAAA", "name", question.Name.String())
 
 		return emptyResponse(header, question)
 	}
 
-	return forwardDNS(query, upstream)
+	resp := forwardDNS(query, upstream)
+
+	if policy.allowsAAAA(resp) {
+		return resp
+	}
+
+	log.Debug("dns: hiding unreachable AAAA", "name", question.Name.String())
+
+	return emptyResponse(header, question)
 }
 
 // emptyResponse builds a NOERROR reply carrying only the original question and

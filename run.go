@@ -29,7 +29,9 @@ func runRun(log *slog.Logger, args []string) {
 	fs.Var(&bypassCIDRs, "B", "bypass CIDR — destinations whose IP falls in this network go direct, not through SOCKS")
 	fs.Var(&verboseLevel, "v", "log verbose level")
 
-	dnsServer := fs.String("D", "", "upstream DNS address for the local IPv4-only resolver on 127.0.0.1:53")
+	dnsServer := fs.String("D", "", "upstream DNS address for the local resolver on 127.0.0.1:53 (IPv4-only unless -6)")
+	ipv6 := fs.Bool("6", false, "enable IPv6 on the TUN; AAAA answers are kept only for addresses reachable via -B")
+	nat64Prefix := fs.String("nat64", "", "NAT64 /96 prefix of the host (e.g. 64:ff9b::/96): bypassed IPv4 is dialed through it, synthesized IPv6 is unmapped")
 	quiet := fs.Bool("q", false, "suppress all log output")
 	uid := fs.Int("uid", os.Geteuid(), "set uid of container process")
 	gid := fs.Int("gid", os.Getegid(), "set gid of container process")
@@ -57,11 +59,13 @@ func runRun(log *slog.Logger, args []string) {
 	log.Debug("forward", "proxies", []string(forwardProxies))
 	log.Debug("local_address_mappings", "mappings", []string(localMappings))
 	log.Debug("bypass_cidrs", "cidrs", []string(bypassCIDRs))
+	log.Debug("ipv6", "enabled", *ipv6, "nat64", *nat64Prefix)
 
 	parsedProxies := parseProxyURLs(forwardProxies)
 	nat := parseAddressMapper(localMappings)
 	bypass := parseBypassNets(bypassCIDRs)
 	dnsUpstream := parseUpstreamDNS(*dnsServer)
+	nat64 := parseNAT64(*nat64Prefix)
 
 	parentFd, childFd := newUnixSocketPair()
 	defer unix.Close(parentFd)
@@ -76,7 +80,7 @@ func runRun(log *slog.Logger, args []string) {
 	cmdArgs := fs.Args()
 	proc := exec.Command("/proc/self/exe", append([]string{"runc",
 		"-unix-fd", strconv.Itoa(childFd), fmt.Sprintf("-privileged=%t", privileged),
-		fmt.Sprintf("-dns=%t", dnsUpstream != ""),
+		fmt.Sprintf("-dns=%t", dnsUpstream != ""), fmt.Sprintf("-ipv6=%t", *ipv6),
 		"-uid", strconv.Itoa(*uid), "-gid", strconv.Itoa(*gid), "--"}, cmdArgs...)...)
 	proc.Stdin = os.Stdin
 	proc.Stdout = os.Stdout
@@ -142,15 +146,21 @@ func runRun(log *slog.Logger, args []string) {
 		socksUDPConn = NewSOCKS5UDPConnector(log, socksTCPConns[i], socksUDPConn, proxyAddr)
 	}
 
-	socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat, bypass)
-	socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat, bypass)
+	socksTCPConn = NewLocalForwardingConnector(dconn, socksTCPConn, nat, bypass, nat64)
+	socksUDPConn = NewLocalForwardingConnector(dconn, socksUDPConn, nat, bypass, nat64)
 
-	stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, socksTCPConn, socksUDPConn, NewTransporter(log))
+	tunNetworkAddr6 := ""
+
+	if *ipv6 {
+		tunNetworkAddr6 = tunNetworkAddrV6
+	}
+
+	stack := NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr, tunNetworkAddr6, socksTCPConn, socksUDPConn, NewTransporter(log))
 	defer stack.Close()
 
 	if dnsFd >= 0 {
 		log.Debug("starting local dns resolver", "upstream", dnsUpstream)
-		startDNSResolver(log, dnsFd, dnsUpstream)
+		startDNSResolver(log, dnsFd, dnsUpstream, &dnsPolicy{ipv6: *ipv6, allow: bypass, nat64: nat64})
 	}
 
 	parentConn.SendACK()
