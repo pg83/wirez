@@ -127,20 +127,11 @@ func (c *localForwardingConnector) DialContext(ctx context.Context, network, add
 	return c.socksConnector.DialContext(ctx, network, address)
 }
 
-// matchNets reports whether the literal IP of a host:port address falls into
-// one of the networks; names never match.
+// matchNets reports whether the IP of a host:port address, as the stack
+// renders destinations, falls into one of the networks.
 func matchNets(nets []*net.IPNet, address string) bool {
-	host, _, err := net.SplitHostPort(address)
-
-	if err != nil {
-		return false
-	}
-
+	host, _ := Throw3(net.SplitHostPort(address))
 	ip := net.ParseIP(host)
-
-	if ip == nil {
-		return false
-	}
 
 	for _, n := range nets {
 		if n.Contains(ip) {
@@ -158,15 +149,10 @@ func nat64Unmap(prefix *net.IPNet, address string) string {
 		return address
 	}
 
-	host, port, err := net.SplitHostPort(address)
-
-	if err != nil {
-		return address
-	}
-
+	host, port := Throw3(net.SplitHostPort(address))
 	ip := net.ParseIP(host)
 
-	if ip == nil || ip.To4() != nil || !prefix.Contains(ip) {
+	if ip.To4() != nil || !prefix.Contains(ip) {
 		return address
 	}
 
@@ -180,12 +166,7 @@ func nat64Map(prefix *net.IPNet, address string) string {
 		return address
 	}
 
-	host, port, err := net.SplitHostPort(address)
-
-	if err != nil {
-		return address
-	}
-
+	host, port := Throw3(net.SplitHostPort(address))
 	ip4 := net.ParseIP(host).To4()
 
 	if ip4 == nil {

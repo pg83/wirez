@@ -228,11 +228,7 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 	return
 }
 
-func (c *socks5Connector) connect(ctx context.Context, network, address string) net.Conn {
-	if network != "tcp" {
-		ThrowFmt("socks5: network %s is not supported", network)
-	}
-
+func (c *socks5Connector) connect(ctx context.Context, _, address string) net.Conn {
 	host, port := hostPort(address)
 
 	conn := Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address))
@@ -286,11 +282,7 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 	return
 }
 
-func (c *socks5UDPConnector) dial(ctx context.Context, network, address string) net.Conn {
-	if network != "udp" {
-		ThrowFmt("socks5: network %s is not supported", network)
-	}
-
+func (c *socks5UDPConnector) dial(ctx context.Context, _, address string) net.Conn {
 	host, port := hostPort(address)
 	src, ok := udpSourceFromContext(ctx)
 

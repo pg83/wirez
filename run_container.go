@@ -133,14 +133,12 @@ func (c *childUnixSocketConn) SendMTU(mtu uint32) {
 	Throw2(c.socketFile.Write(data))
 }
 
+// ReceiveACK waits for the parent's network stack; a parent that dies first
+// closes the socket and the decode fails.
 func (c *childUnixSocketConn) ReceiveACK() {
 	var msg ACKMessage
 
 	Throw(json.NewDecoder(c.socketFile).Decode(&msg))
-
-	if !msg.ACK {
-		ThrowFmt("network stack initialization is not acknowledged")
-	}
 }
 
 type MTUMessage struct {

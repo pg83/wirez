@@ -11,7 +11,10 @@ PREFIX = "64:ff9b::/96"
 # 192.0.2.1 embedded in the prefix
 SYNTHESIZED = "64:ff9b::c000:201"
 
-lib.reexec_in_netns(setup=[["ip", "-6", "addr", "add", f"{SYNTHESIZED}/128", "dev", "lo"]])
+lib.reexec_in_netns(setup=[
+    ["ip", "-6", "addr", "add", f"{SYNTHESIZED}/128", "dev", "lo"],
+    ["ip", "-6", "addr", "add", "2001:db8:b::7/128", "dev", "lo"],
+])
 
 
 class NAT64Test(lib.ContainerTest):
@@ -48,6 +51,12 @@ class NAT64Test(lib.ContainerTest):
         echo = lib.EchoServer()
         flags = [*self.flags, "-L", f"192.0.2.1:9:{echo.addr}/tcp"]
         self.assertEqual(lib.in_container(flags, "tcp", "192.0.2.1:9"), "echo:hello")
+
+    def test_bypassed_ipv6_is_dialed_as_is(self):
+        echo = lib.EchoServer(host="2001:db8:b::7")
+        flags = [*self.flags, "-6", "-B", "2001:db8:b::/48"]
+        self.assertEqual(lib.in_container(flags, "tcp", echo.addr), "echo:hello")
+        self.assertEqual(self.proxy.connects, [])
 
     def test_without_the_flag_bypassed_ipv4_is_dialed_as_ipv4(self):
         echo = lib.EchoServer(host=SYNTHESIZED)

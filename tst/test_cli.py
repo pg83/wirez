@@ -11,7 +11,7 @@ class CliTest(unittest.TestCase):
         result = lib.wirez(check=False)
         self.assertEqual(result.returncode, 1)
         self.assertIn("Usage: wirez", result.stderr)
-        for flag in ("-F", "-L", "-B", "-D", "-6", "-nat64", "-connect-timeout", "-tcp-timeout",
+        for flag in ("-F", "-L", "-B", "-D", "-6", "-nat64", "-hostname", "-connect-timeout", "-tcp-timeout",
                      "-udp-timeout", "-v", "-q", "-uid", "-gid"):
             self.assertIn(f"\n  {flag} ", result.stderr)
 
@@ -49,11 +49,28 @@ class AllFlagsTest(lib.ContainerTest):
             "-F", proxy.addr, "-F", f"socks5h://{proxy.addr}",
             "-L", "53:127.0.0.1:5353/udp", "-L", "8080:127.0.0.1:80", "-B", "198.51.100.0/24",
             "-D", "192.0.2.53", "-D", "192.0.2.54:5353",
-            "-6", "-nat64", "64:ff9b::/96",
+            "-6", "-nat64", "64:ff9b::/96", "-hostname", "box",
             "-connect-timeout", "7s", "-tcp-timeout", "1m", "-udp-timeout", "30s",
             "-v", "-v", "-q", "-uid", str(lib.os.getuid()), "-gid", str(lib.os.getgid()),
         ]
         self.assertEqual(lib.in_container(flags, "id"), f"{lib.os.getuid()} {lib.os.getgid()}")
+
+
+class HostnameTest(lib.ContainerTest):
+    def test_hostname_inside_the_container(self):
+        proxy = lib.Socks5Server()
+        self.assertEqual(lib.in_container(["-F", proxy.addr], "hostname"), "wirez")
+        self.assertEqual(lib.in_container(["-F", proxy.addr, "-hostname", "box"], "hostname"), "box")
+        hosts = lib.in_container(["-F", proxy.addr, "-hostname", "box"], "file", "/etc/hosts")
+        self.assertIn("127.0.0.1 box box.localdomain\n", hosts)
+
+    def test_container_setup_failure_is_reported(self):
+        # a hostname the kernel refuses makes the container half die before
+        # it hands its network descriptors over
+        proxy = lib.Socks5Server()
+        result = lib.in_container(["-F", proxy.addr, "-hostname", "x" * 300], "id", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("child exited before sending network file descriptors", result.stderr)
 
 
 class LoggingTest(lib.ContainerTest):

@@ -284,6 +284,10 @@ def mode_signal(number):
     os.kill(os.getpid(), int(number))
 
 
+def mode_hostname():
+    sys.stdout.write(socket.gethostname())
+
+
 def mode_id():
     sys.stdout.write(f"{os.getuid()} {os.getgid()}")
 
@@ -312,6 +316,7 @@ MODES = {
     "exit": mode_exit,
     "signal": mode_signal,
     "id": mode_id,
+    "hostname": mode_hostname,
     "sleep": mode_sleep,
 }
 

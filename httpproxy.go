@@ -36,11 +36,7 @@ func (c *httpConnector) DialContext(ctx context.Context, network, address string
 	return
 }
 
-func (c *httpConnector) connect(ctx context.Context, network, address string) net.Conn {
-	if network != "tcp" {
-		ThrowFmt("http proxy: network %s is not supported", network)
-	}
-
+func (c *httpConnector) connect(ctx context.Context, _, address string) net.Conn {
 	conn := Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address))
 	defer CloseOnThrow(conn)
 

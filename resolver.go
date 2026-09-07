@@ -156,28 +156,29 @@ func startDNSResolver(log *slog.Logger, udpFd, tcpFd int, upstreams *dnsUpstream
 	tcpListener := Throw2(net.FileListener(tcpFile))
 	Throw(tcpFile.Close())
 
-	go serveDNS(log, udpConn, upstreams, policy)
-	go serveDNSTCP(log, tcpListener, upstreams, policy)
+	go func() {
+		Try(func() {
+			serveDNS(log, udpConn, upstreams, policy)
+		}).Catch(func(exc *Exception) {
+			log.Debug("dns: udp listener closed", "err", exc)
+		})
+	}()
+
+	go func() {
+		Try(func() {
+			serveDNSTCP(log, tcpListener, upstreams, policy)
+		}).Catch(func(exc *Exception) {
+			log.Debug("dns: tcp listener closed", "err", exc)
+		})
+	}()
 }
 
-// serveDNS answers queries on conn until it is closed.
+// serveDNS answers queries on conn until reading it fails, which only
+// happens when it is closed.
 func serveDNS(log *slog.Logger, conn net.PacketConn, upstreams *dnsUpstreams, policy *dnsPolicy) {
 	for {
 		buf := make([]byte, dnsBufferSize)
-		n, addr, err := conn.ReadFrom(buf)
-
-		if errors.Is(err, net.ErrClosed) {
-			log.Debug("dns: listener closed")
-
-			return
-		}
-
-		if err != nil {
-			log.Debug("dns: read error", "err", err)
-
-			continue
-		}
-
+		n, addr := Throw3(conn.ReadFrom(buf))
 		query := buf[:n:n]
 
 		go func() {
@@ -196,23 +197,11 @@ func handleDNSQuery(log *slog.Logger, conn net.PacketConn, addr net.Addr, query 
 	Throw2(conn.WriteTo(resp, addr))
 }
 
-// serveDNSTCP answers queries on TCP connections until the listener is
-// closed.
+// serveDNSTCP answers queries on TCP connections until accepting fails,
+// which only happens when the listener is closed.
 func serveDNSTCP(log *slog.Logger, ln net.Listener, upstreams *dnsUpstreams, policy *dnsPolicy) {
 	for {
-		conn, err := ln.Accept()
-
-		if errors.Is(err, net.ErrClosed) {
-			log.Debug("dns: tcp listener closed")
-
-			return
-		}
-
-		if err != nil {
-			log.Debug("dns: accept error", "err", err)
-
-			continue
-		}
+		conn := Throw2(ln.Accept())
 
 		go func() {
 			defer conn.Close()

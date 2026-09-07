@@ -26,6 +26,7 @@ type runFlags struct {
 	verboseLevel   countFlag
 	ipv6           bool
 	nat64Prefix    string
+	hostname       string
 	connectTimeout time.Duration
 	tcpTimeout     time.Duration
 	udpTimeout     time.Duration
@@ -47,6 +48,7 @@ func newRunFlagSet() (*flag.FlagSet, *runFlags) {
 	fs.Var(&f.verboseLevel, "v", "log verbose level")
 	fs.BoolVar(&f.ipv6, "6", false, "enable IPv6 on the TUN; AAAA answers are kept only for addresses reachable via -B")
 	fs.StringVar(&f.nat64Prefix, "nat64", "", "NAT64 /96 prefix of the host (e.g. 64:ff9b::/96): bypassed IPv4 is dialed through it, synthesized IPv6 is unmapped")
+	fs.StringVar(&f.hostname, "hostname", "wirez", "hostname inside the container")
 	fs.DurationVar(&f.connectTimeout, "connect-timeout", connectTimeout, "timeout of a dial, proxy handshakes included")
 	fs.DurationVar(&f.tcpTimeout, "tcp-timeout", 0, "idle timeout of TCP connections, 0 disables it")
 	fs.DurationVar(&f.udpTimeout, "udp-timeout", udpIOTimeout, "idle timeout of UDP flows")
@@ -111,7 +113,7 @@ func runRun(log *slog.Logger, args []string) {
 	cmdArgs := fs.Args()
 	proc := exec.Command("/proc/self/exe", append([]string{"runc",
 		"-unix-fd", strconv.Itoa(childFd), fmt.Sprintf("-privileged=%t", privileged),
-		fmt.Sprintf("-dns=%t", useDNS), fmt.Sprintf("-ipv6=%t", f.ipv6),
+		fmt.Sprintf("-dns=%t", useDNS), fmt.Sprintf("-ipv6=%t", f.ipv6), "-hostname", f.hostname,
 		"-uid", strconv.Itoa(f.uid), "-gid", strconv.Itoa(f.gid), "--"}, cmdArgs...)...)
 	proc.Stdin = os.Stdin
 	proc.Stdout = os.Stdout

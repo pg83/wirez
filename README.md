@@ -72,6 +72,7 @@ IPv6 literals are bracketed everywhere they carry a port: `-F '[::1]:1080'`, `-L
 | `-D address` | upstream DNS for the local resolver; repeat for failover |
 | `-6` | IPv6 inside the container |
 | `-nat64 prefix` | the host's NAT64 `/96` prefix |
+| `-hostname name` | hostname inside the container; default `wirez` |
 | `-connect-timeout d` | a dial, proxy handshakes included; default `10s` |
 | `-tcp-timeout d` | idle timeout of TCP connections; default `0`, which leaves liveness to TCP keepalive |
 | `-udp-timeout d` | idle timeout of UDP flows; default `15s` |

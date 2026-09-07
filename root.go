@@ -21,6 +21,7 @@ Flags:
   -D address           upstream DNS for the local resolver on 127.0.0.1:53 (repeat for failover)
   -6                   enable IPv6 on the TUN; AAAA answers are kept only for -B networks
   -nat64 prefix        NAT64 /96 prefix of the host, e.g. 64:ff9b::/96
+  -hostname name       hostname inside the container (default wirez)
   -connect-timeout d   timeout of a dial, proxy handshakes included (default 10s)
   -tcp-timeout d       idle timeout of TCP connections, 0 disables it (default 0)
   -udp-timeout d       idle timeout of UDP flows (default 15s)

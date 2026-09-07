@@ -602,7 +602,7 @@ def closed_tcp_port():
     return f"127.0.0.1:{port}"
 
 
-def reexec_in_netns(setup=()):
+def reexec_in_netns(setup=(), mount=False):
     """Re-runs the current test script in a fresh user and network namespace
     where loopback is up and the given commands (`ip`, `tc`) have been run
     as root, so a test can give the host any address or route it needs (a
@@ -627,8 +627,11 @@ def reexec_in_netns(setup=()):
     )
     drop = shlex.join(["unshare", "-U", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"])
     env = dict(os.environ, WIREZ_TEST_NETNS="1")
+    # a mount namespace too, when the test wants to bind its own files over
+    # the host's (setup commands run as root in it)
+    flags = ["-r", "-n", "-m"] if mount else ["-r", "-n"]
     result = subprocess.run(
-        ["unshare", "-r", "-n", "sh", "-c", f'{prelude} && exec {drop} "$@"', "sh", sys.executable, *sys.argv],
+        ["unshare", *flags, "sh", "-c", f'{prelude} && exec {drop} "$@"', "sh", sys.executable, *sys.argv],
         env=env, check=False,
     )
     sys.exit(result.returncode)
@@ -839,7 +842,9 @@ class SshServer:
     user with nss_wrapper where nix's libc cannot see that user."""
 
     def __init__(self, test, directory, extra_env=None):
-        lib_require = require_tools(test, "ssh", "sshd", "ssh-keygen")
+        if os.geteuid() == 0:
+            test.skipTest("sshd run as root needs the privilege separation user and directory")
+        require_tools(test, "ssh", "sshd", "ssh-keygen")
         self.dir = Path(directory)
         self.env = wirez_env({**(extra_env or {}), **nss_env(self.dir)})
         for name in ("host_key", "user_key"):
