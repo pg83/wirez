@@ -10,8 +10,9 @@ import (
 )
 
 // udpFlowQueue is how many datagrams a flow buffers before dropping, which is
-// what UDP does anyway.
-const udpFlowQueue = 64
+// what UDP does anyway; a QUIC server answers a request with a burst of
+// hundreds, so the queue is deep enough not to be the bottleneck.
+const udpFlowQueue = 1024
 
 // udpAssociation is one SOCKS5 UDP association shared by every flow of a
 // single source endpoint, the way a NAT gives one internal socket one

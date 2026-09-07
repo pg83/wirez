@@ -11,7 +11,7 @@ PREFIX = "64:ff9b::/96"
 # 192.0.2.1 embedded in the prefix
 SYNTHESIZED = "64:ff9b::c000:201"
 
-lib.reexec_in_netns(setup=[["-6", "addr", "add", f"{SYNTHESIZED}/128", "dev", "lo"]])
+lib.reexec_in_netns(setup=[["ip", "-6", "addr", "add", f"{SYNTHESIZED}/128", "dev", "lo"]])
 
 
 class NAT64Test(lib.ContainerTest):

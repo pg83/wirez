@@ -80,10 +80,14 @@ func (t *transporter) Transport(rw1, rw2 io.ReadWriter) error {
 	return err
 }
 
+// relayBufferSize holds the largest UDP datagram, so one is never split or
+// cut by the copy; for TCP the size is immaterial.
+const relayBufferSize = 65536
+
 // relay copies r into w until EOF or an error. On EOF it half-closes w and
 // reports nil when that worked, io.EOF otherwise so that Transport stops.
 func (t *transporter) relay(w io.Writer, r io.Reader, errc chan<- error) {
-	_, err := io.Copy(w, r)
+	_, err := io.CopyBuffer(w, r, make([]byte, relayBufferSize))
 
 	if err == nil {
 		err = io.EOF

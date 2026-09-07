@@ -111,7 +111,7 @@ go_test = command(
 # missing, unless WIREZ_TEST_CONTAINER_REQUIRED is set (CI does), which turns
 # the skip into a failure. The variable is part of the node so that flipping
 # it reruns the tests.
-INTEGRATION_LIB = ["$(S)/tst/lib.py", "$(S)/tst/dnswire.py", "$(S)/tst/client.py"]
+INTEGRATION_LIB = ["$(S)/tst/lib.py", "$(S)/tst/dnswire.py", "$(S)/tst/client.py", "$(S)/tst/httpd.py"]
 
 integration_tests = []
 for test_path in build.glob("$(S)/tst/test_*.py"):

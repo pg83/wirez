@@ -7,8 +7,8 @@ import unittest
 import lib
 
 lib.reexec_in_netns(setup=[
-    ["route", "add", "local", "198.51.100.0/24", "dev", "lo"],
-    ["-6", "addr", "add", "2001:db8:b::7/128", "dev", "lo"],
+    ["ip", "route", "add", "local", "198.51.100.0/24", "dev", "lo"],
+    ["ip", "-6", "addr", "add", "2001:db8:b::7/128", "dev", "lo"],
 ])
 
 

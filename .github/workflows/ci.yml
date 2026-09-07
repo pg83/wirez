@@ -14,29 +14,34 @@ jobs:
   test:
     name: Build and test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
-          go-version-file: go.mod
-          cache: false
+          enable_kvm: false
 
-      - name: Allow unprivileged user namespaces for the container test
+      - name: Allow unprivileged user namespaces for the container tests
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Build
-        run: ./build -j "$(nproc)" wirez
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' \
+            develop -c ./build -j "$(nproc)" wirez
 
       - name: Test
         env:
           WIREZ_TEST_CONTAINER_REQUIRED: "1"
-        run: ./build -j "$(nproc)" test
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' \
+            develop -c ./build -j "$(nproc)" test
 
       - name: Test with the race detector
         env:
           WIREZ_TEST_CONTAINER_REQUIRED: "1"
-        run: ./build -j "$(nproc)" -Drace test
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' \
+            develop -c ./build -j "$(nproc)" -Drace test

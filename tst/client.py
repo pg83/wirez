@@ -75,6 +75,21 @@ def mode_udp_twice(address, pause):
         sys.stdout.write(" ".join(replies))
 
 
+def mode_udp_size(size, address):
+    """One datagram of the given size; prints the size of the echo."""
+    host, port = split_host_port(address)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(TIMEOUT)
+        payload = os.urandom(int(size))
+        sock.sendto(payload, (host, port))
+        try:
+            data, _ = sock.recvfrom(65535)
+        except socket.timeout:
+            sys.stdout.write("timeout")
+            return
+        sys.stdout.write(f"{len(data)} {'same' if data == payload else 'different'}")
+
+
 def mode_udp_multi(*addresses):
     """One socket talking to several destinations, replies matched by sender."""
     targets = [split_host_port(a) for a in addresses]
@@ -90,6 +105,53 @@ def mode_udp_multi(*addresses):
         except socket.timeout:
             pass
         sys.stdout.write(" ".join(replies.get(target, "timeout") for target in targets))
+
+
+def mode_tcp_many(count, address):
+    """Many concurrent connections at once; prints how many got their echo."""
+    import threading
+
+    host, port = split_host_port(address)
+    good = [0]
+    lock = threading.Lock()
+
+    def one():
+        try:
+            with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
+                sock.sendall(b"hello")
+                sock.shutdown(socket.SHUT_WR)
+                if read_all(sock) == b"echo:hello":
+                    with lock:
+                        good[0] += 1
+        except OSError:
+            pass
+
+    threads = [threading.Thread(target=one) for _ in range(int(count))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    sys.stdout.write(f"{good[0]}/{count}")
+
+
+def mode_udp_burst(count, address):
+    """A burst of datagrams from one socket; prints how many replies came back."""
+    host, port = split_host_port(address)
+    count = int(count)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        # a program that fires bursts sizes its own receive buffer for them
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+        sock.settimeout(2.0)
+        for index in range(count):
+            sock.sendto(f"burst{index}".encode(), (host, port))
+        seen = set()
+        try:
+            while len(seen) < count:
+                data, _ = sock.recvfrom(65536)
+                seen.add(data)
+        except socket.timeout:
+            pass
+        sys.stdout.write(f"{len(seen)}/{count}")
 
 
 def mode_dns(name, family="A"):
@@ -235,7 +297,10 @@ MODES = {
     "tcp": mode_tcp,
     "udp": mode_udp,
     "udp-multi": mode_udp_multi,
+    "udp-size": mode_udp_size,
     "udp-twice": mode_udp_twice,
+    "tcp-many": mode_tcp_many,
+    "udp-burst": mode_udp_burst,
     "dns": mode_dns,
     "dns-tcp": mode_dns_tcp,
     "dns-raw": mode_dns_raw,

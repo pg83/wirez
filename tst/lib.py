@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,7 @@ import dnswire
 
 WIREZ = Path(os.environ["WIREZ_TEST_BINARY"]).resolve()
 CLIENT = str(Path(__file__).resolve().with_name("client.py"))
+HTTPD = str(Path(__file__).resolve().with_name("httpd.py"))
 REQUIRED = bool(os.environ.get("WIREZ_TEST_CONTAINER_REQUIRED"))
 TIMEOUT = 60
 
@@ -139,7 +141,7 @@ class TcpServer:
         self.sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((host, 0))
-        self.sock.listen(16)
+        self.sock.listen(512)
         self.port = self.sock.getsockname()[1]
         self.host = host
         threading.Thread(target=self._serve, daemon=True).start()
@@ -207,6 +209,7 @@ class SilentServer(TcpServer):
 class UdpEchoServer:
     def __init__(self, host="127.0.0.1"):
         self.sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
         self.sock.bind((host, 0))
         self.port = self.sock.getsockname()[1]
         self.addr = format_addr(host, self.port)
@@ -350,8 +353,10 @@ class Socks5Server(TcpServer):
 
     def associate(self, control):
         relay_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        relay_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
         relay_sock.bind(("127.0.0.1", 0))
         out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        out.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
         out.bind(("127.0.0.1", 0))
         with self.lock:
             self.associations += 1
@@ -458,19 +463,19 @@ class DnsServer:
     address lists; UDP answers carry the TC bit and no records when
     truncate_udp is set. Every query is recorded as (name, qtype, transport)."""
 
-    def __init__(self, records, truncate_udp=False):
+    def __init__(self, records, truncate_udp=False, host="127.0.0.1"):
         self.records = records
         self.truncate_udp = truncate_udp
         self.lock = threading.Lock()
         self.queries = []
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp.bind(("127.0.0.1", 0))
+        self.udp.bind((host, 0))
         self.port = self.udp.getsockname()[1]
         self.tcp = socket.socket(socket.AF_INET)
         self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.tcp.bind(("127.0.0.1", self.port))
+        self.tcp.bind((host, self.port))
         self.tcp.listen(16)
-        self.addr = f"127.0.0.1:{self.port}"
+        self.addr = f"{host}:{self.port}"
         threading.Thread(target=self._serve_udp, daemon=True).start()
         threading.Thread(target=self._serve_tcp, daemon=True).start()
 
@@ -539,15 +544,16 @@ def closed_tcp_port():
 
 
 def reexec_in_netns(setup=()):
-    """Re-runs the current test script as root in a fresh user and network
-    namespace, with loopback up and the given `ip` argument lists applied, so
-    a test can give the host any address or route it needs (a NAT64 prefix,
-    a LAN to bypass to) without privileges outside. Returns in the inner
-    process; the outer one exits with the inner's status. Whether the
-    container can be created at all is decided outside, as skip or failure."""
+    """Re-runs the current test script in a fresh user and network namespace
+    where loopback is up and the given commands (`ip`, `tc`) have been run
+    as root, so a test can give the host any address or route it needs (a
+    NAT64 prefix, a LAN to bypass to) without privileges outside. The script
+    itself then runs as the original uid again (a nested user namespace maps
+    root back to it): programs such as sshd behave differently for root.
+    Returns in the inner process; the outer one exits with the inner's
+    status. Whether the container can be created at all is decided outside,
+    as skip or failure."""
     if os.environ.get("WIREZ_TEST_NETNS"):
-        for argv in setup:
-            subprocess.run(["ip", *argv], check=True)
         return
     problem = container_support_problem()
     if problem is not None:
@@ -556,9 +562,213 @@ def reexec_in_netns(setup=()):
             sys.exit(1)
         print(f"skipped: {problem}", file=sys.stderr)
         sys.exit(0)
+    import shlex
+    prelude = " && ".join(
+        shlex.join([str(a) for a in argv]) for argv in ([["ip", "link", "set", "lo", "up"], *setup])
+    )
+    drop = shlex.join(["unshare", "-U", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"])
     env = dict(os.environ, WIREZ_TEST_NETNS="1")
     result = subprocess.run(
-        ["unshare", "-r", "-n", "sh", "-c", 'ip link set lo up && exec "$@"', "sh", sys.executable, *sys.argv],
+        ["unshare", "-r", "-n", "sh", "-c", f'{prelude} && exec {drop} "$@"', "sh", sys.executable, *sys.argv],
         env=env, check=False,
     )
     sys.exit(result.returncode)
+
+
+# --- real programs as workloads ---------------------------------------------
+
+# The address real servers bind and the container dials: it is put on the
+# host's loopback inside the test's private network namespace, so a proxy on
+# the host reaches it for real, no destination overrides needed.
+WORKLOAD_IPV4 = "192.0.2.1"
+WORKLOAD_IPV6 = "2001:db8::1"
+WORKLOAD_NETNS_SETUP = [
+    ["ip", "addr", "add", f"{WORKLOAD_IPV4}/32", "dev", "lo"],
+    ["ip", "-6", "addr", "add", f"{WORKLOAD_IPV6}/128", "dev", "lo"],
+]
+
+
+def require_tools(test, *names):
+    """Skips (or fails, when the container is required) without the tools."""
+    missing = [name for name in names if shutil.which(name) is None]
+    if not missing:
+        return
+    problem = "missing tools: " + " ".join(missing)
+    if REQUIRED:
+        raise AssertionError(problem)
+    test.skipTest(problem)
+
+
+def wait_port(host, port, timeout=15, daemon=None):
+    """Waits until something accepts TCP connections on host:port; a daemon
+    given here fails the wait as soon as it exits, with its output."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if daemon is not None:
+            daemon.check_running()
+        try:
+            socket.create_connection((host, port), timeout=1).close()
+            return
+        except OSError:
+            time.sleep(0.05)
+    detail = f"\n{daemon.argv[0]} output:\n{daemon.output()}" if daemon is not None else ""
+    raise TimeoutError(f"nothing listens on {host}:{port} after {timeout}s{detail}")
+
+
+def wait_tls(host, port, timeout=15, daemon=None):
+    """Waits until a TLS handshake with host:port succeeds (a server may
+    listen before its certificate is ready)."""
+    import ssl
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if daemon is not None:
+            daemon.check_running()
+        try:
+            with socket.create_connection((host, port), timeout=1) as raw:
+                with context.wrap_socket(raw, server_hostname=host):
+                    return
+        except (OSError, ssl.SSLError):
+            time.sleep(0.1)
+    detail = f"\n{daemon.argv[0]} output:\n{daemon.output()}" if daemon is not None else ""
+    raise TimeoutError(f"no TLS handshake with {host}:{port} after {timeout}s{detail}")
+
+
+def free_port(host=WORKLOAD_IPV4):
+    """A port nothing listens on at host, for servers that take one by number."""
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
+class Daemon:
+    """A server program running for the duration of a test; its output is
+    kept for the failure report."""
+
+    def __init__(self, test, argv, env=None, cwd=None, stdin=None):
+        self.argv = [str(a) for a in argv]
+        self.log = tempfile.TemporaryFile(prefix="wirez-daemon-")
+        self.proc = subprocess.Popen(
+            self.argv, env=env, cwd=cwd, stdin=stdin or subprocess.DEVNULL,
+            stdout=self.log, stderr=subprocess.STDOUT,
+        )
+        test.addCleanup(self.stop)
+
+    def output(self):
+        self.log.seek(0)
+        return self.log.read().decode(errors="replace")
+
+    def check_running(self):
+        if self.proc.poll() is not None:
+            raise AssertionError(f"{self.argv[0]} exited with {self.proc.returncode}:\n{self.output()}")
+
+    def stop(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+        self.log.close()
+
+
+def run(argv, *, env=None, cwd=None, input=None, timeout=TIMEOUT, check=True):
+    """Runs a program on the host side and returns its CompletedProcess with
+    decoded output; raises with both streams on a non-zero exit when check."""
+    raw = subprocess.run(
+        [str(a) for a in argv], env=env, cwd=cwd, input=input,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False,
+    )
+    result = subprocess.CompletedProcess(
+        raw.args, raw.returncode, raw.stdout.decode(errors="replace"), raw.stderr.decode(errors="replace"),
+    )
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"{argv[0]} exited with {result.returncode}: {result.args!r}\n"
+            f"--- stdout ---\n{result.stdout}--- stderr ---\n{result.stderr}"
+        )
+    return result
+
+
+def wirez_env(extra=None):
+    """Environment for a wirez run: the current one plus extra."""
+    env = dict(os.environ)
+    env.update(extra or {})
+    return env
+
+
+def in_container_run(flags, argv, *, env=None, timeout=TIMEOUT, check=True, input=None):
+    """Runs an arbitrary program inside a wirez container started with flags."""
+    return run([WIREZ, *flags, "--", *argv], env=env, timeout=timeout, check=check, input=input)
+
+
+def nss_env(directory):
+    """Environment that lets nix-built ssh and sshd see the current user on a
+    host whose users come from NSS modules nix's libc cannot load. Empty when
+    NSS_WRAPPER_LIB is not set (the dev shell sets it)."""
+    library = os.environ.get("NSS_WRAPPER_LIB")
+    if not library:
+        return {}
+    try:
+        import pwd
+        name = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        name = "tester"
+    passwd = Path(directory) / "passwd"
+    group = Path(directory) / "group"
+    passwd.write_text(f"{name}:x:{os.getuid()}:{os.getgid()}:test:{directory}:/bin/sh\n")
+    group.write_text(f"{name}:x:{os.getgid()}:\n")
+    return {"LD_PRELOAD": library, "NSS_WRAPPER_PASSWD": str(passwd), "NSS_WRAPPER_GROUP": str(group)}
+
+
+def static_busybox():
+    """Path of a statically linked busybox: the dev shell names one, else
+    whatever is on PATH."""
+    return os.environ.get("WIREZ_STATIC_BUSYBOX") or shutil.which("busybox")
+
+
+def user_name():
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return "tester"
+
+
+def sha256_file(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def random_file(directory, name, size):
+    """A file of pseudo-random bytes; returns (path, sha256)."""
+    path = Path(directory) / name
+    with open(path, "wb") as stream:
+        remaining = size
+        while remaining > 0:
+            chunk = os.urandom(min(remaining, 1 << 20))
+            stream.write(chunk)
+            remaining -= len(chunk)
+    return path, sha256_file(path)
+
+
+class WorkloadTest(ContainerTest):
+    """Base for tests that run real programs against real servers; the module
+    must call lib.reexec_in_netns(setup=lib.WORKLOAD_NETNS_SETUP) first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="wirez-workload-")
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.proxy = Socks5Server()
+        self.flags = ["-F", self.proxy.addr]
+
+    def daemon(self, argv, **kwargs):
+        return Daemon(self, argv, **kwargs)

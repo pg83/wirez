@@ -46,6 +46,7 @@ class ProcessTest(lib.ContainerTest):
         finally:
             proc.kill()
             proc.wait()
+            proc.stdout.close()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:

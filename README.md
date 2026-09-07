@@ -82,12 +82,13 @@ The program's exit status becomes wirez's (128 plus the signal number when a sig
 ## Development
 
 ```
+nix develop          # Go, the build runner's Python and every program the tests drive
 ./build              # .build/bin/wirez, published as ./wirez
 ./build test         # gofmt, go vet, unit and end-to-end tests
 ./build -Drace test
 ```
 
-The `build` runner next to `build.py` is a copy of the monorepo's; it needs Go and Python 3.10+. The tests are `tst/test_*.py`, one build node each (`./build it_dns`): every one runs the real binary around fake proxies and servers on loopback, with `tst/client.py` making traffic inside the container. They need `/dev/net/tun` and unprivileged user namespaces and skip otherwise; `WIREZ_TEST_CONTAINER_REQUIRED=1` (CI sets it) makes that a failure.
+`flake.nix` provides the dev shell; without it, `build` needs Go and Python 3.10+ on `PATH`, and the tests skip the programs they cannot find. The tests are `tst/test_*.py`, one build node each (`./build it_ssh`): every one runs the real binary, most of them with real programs (curl over HTTP/1.1, 2 and 3, sshd, git, iperf3, dig, real SOCKS5 and HTTP proxies, a static busybox) against real servers in a private network namespace where the servers sit on `192.0.2.1`, with some on a lossy link. They need `/dev/net/tun` and unprivileged user namespaces and skip otherwise; `WIREZ_TEST_CONTAINER_REQUIRED=1` (CI sets it) makes that a failure.
 
 ## Contributing
 
