@@ -1,30 +1,22 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"io"
+	"errors"
+	"fmt"
 	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"errors"
-	"log/slog"
-
-	"github.com/ginuerzh/gosocks5"
-	"github.com/ginuerzh/gosocks5/client"
 )
 
 const (
-	// tcpIOTimeout is the default timeout for each TCP i/o operation.
-	tcpIOTimeout = 1 * time.Minute
-	// udpIOTimeout is the default timeout for each UDP i/o operation.
+	// udpIOTimeout is the default idle timeout of a UDP flow.
 	udpIOTimeout = 15 * time.Second
-	// connectTimeout is the default timeout for TCP/UDP dial connect
-	connectTimeout = 3 * time.Second
+	// connectTimeout is the default timeout for a TCP/UDP dial, proxy
+	// handshakes included.
+	connectTimeout = 10 * time.Second
 )
 
 // Connector is responsible for connecting to the destination address.
@@ -36,280 +28,98 @@ func NewDirectConnector() Connector {
 	return &net.Dialer{}
 }
 
-type SocksAddr struct {
-	Address string
-	Auth    *url.Userinfo
+// unsupportedConnector refuses every dial with a fixed reason.
+type unsupportedConnector struct {
+	reason string
 }
 
-func NewSOCKS5Connector(connector Connector, socksAddr *SocksAddr) Connector {
-	selector := client.DefaultSelector
-
-	if socksAddr.Auth != nil {
-		selector = client.NewClientSelector(socksAddr.Auth, gosocks5.MethodUserPass, gosocks5.MethodNoAuth)
-	}
-
-	return &socks5Connector{
-		tcpConnector: connector,
-		selector:     selector,
-		socksAddress: socksAddr.Address,
-	}
+func (c *unsupportedConnector) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New(c.reason)
 }
 
-type socks5Connector struct {
-	tcpConnector Connector
-	selector     gosocks5.Selector
-	socksAddress string
+// closeWriter is implemented by stream connections that can shut down their
+// sending side alone (net.TCPConn, gonet.TCPConn, TimeoutConn, httpTunnel).
+type closeWriter interface {
+	CloseWrite() error
 }
 
-func (c *socks5Connector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	err = Try(func() {
-		conn = c.connect(ctx, network, address)
-	}).AsError()
-
-	if conn != nil {
-		err = errors.Join(err, conn.SetDeadline(time.Time{}))
-	}
-
-	return
-}
-
-func (c *socks5Connector) connect(ctx context.Context, network, address string) net.Conn {
-	if network != "tcp" {
-		ThrowFmt("network %s is not supported", network)
-	}
-
-	dstAddr := Throw2(gosocks5.NewAddr(address))
-
-	conn := Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
-	Throw(conn.SetDeadline(time.Now().Add(connectTimeout)))
-
-	cc := gosocks5.ClientConn(conn, c.selector)
-	Throw(cc.Handleshake())
-
-	req := gosocks5.NewRequest(gosocks5.CmdConnect, dstAddr)
-
-	Throw(req.Write(cc))
-
-	reply := Throw2(gosocks5.ReadReply(cc))
-
-	if reply.Rep != gosocks5.Succeeded {
-		ThrowFmt("destination address [%s] is unavailable", dstAddr)
-	}
-
-	return &socks5Conn{Conn: cc, raw: conn}
-}
-
-// socks5Conn is an established SOCKS5 CONNECT stream. gosocks5.Conn hides the
-// transport connection, so half-closes are forwarded to it here; with proxy
-// chaining raw is itself a socks5Conn and the shutdown travels down the chain.
-type socks5Conn struct {
-	*gosocks5.Conn
-	raw net.Conn
-}
-
-func (c *socks5Conn) CloseWrite() error {
-	if cw, ok := c.raw.(closeWriter); ok {
+// closeWrite half-closes conn when it supports that.
+func closeWrite(conn net.Conn) error {
+	if cw, ok := conn.(closeWriter); ok {
 		return cw.CloseWrite()
 	}
 
 	return errors.ErrUnsupported
 }
 
-func NewSOCKS5UDPConnector(log *slog.Logger, tcpConnector Connector, udpConnector Connector, socksAddr *SocksAddr) Connector {
-	selector := client.DefaultSelector
-
-	if socksAddr.Auth != nil {
-		selector = client.NewClientSelector(socksAddr.Auth, gosocks5.MethodUserPass, gosocks5.MethodNoAuth)
+// applyDeadline bounds a proxy handshake on conn by the context deadline.
+func applyDeadline(ctx context.Context, conn net.Conn) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		return conn.SetDeadline(deadline)
 	}
 
-	return &socks5UDPConnector{
-		log:          log,
-		tcpConnector: tcpConnector,
-		udpConnector: udpConnector,
-		selector:     selector,
-		socksAddress: socksAddr.Address,
-	}
+	return nil
 }
 
-type socks5UDPConnector struct {
-	log          *slog.Logger
-	tcpConnector Connector
-	udpConnector Connector
-	selector     gosocks5.Selector
-	socksAddress string
-}
-
-func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (result net.Conn, err error) {
-	var socksConn net.Conn
-
-	err = Try(func() {
-		socksConn, result = c.connect(ctx, network, address)
-	}).AsError()
-
-	if socksConn != nil {
-		err = errors.Join(err, socksConn.SetDeadline(time.Time{}))
-	}
-
-	if err != nil && socksConn != nil {
-		err = errors.Join(err, socksConn.Close())
-	}
-
-	return
-}
-
-func (c *socks5UDPConnector) connect(ctx context.Context, network, address string) (net.Conn, net.Conn) {
-	if network != "udp" {
-		ThrowFmt("network %s is not supported", network)
-	}
-
-	dstAddr := Throw2(gosocks5.NewAddr(address))
-	dstUDPAddr := Throw2(net.ResolveUDPAddr("udp", address))
-
-	socksConn := Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress))
-	Throw(socksConn.SetDeadline(time.Now().Add(connectTimeout)))
-
-	cc := gosocks5.ClientConn(socksConn, c.selector)
-	Throw(cc.Handleshake())
-
-	socksConn = cc
-	req := gosocks5.NewRequest(gosocks5.CmdUdp, &gosocks5.Addr{Type: dstAddr.Type})
-
-	Throw(req.Write(socksConn))
-
-	c.log.Debug("udp cmd request write success", "dstAddr", address)
-
-	reply := Throw2(gosocks5.ReadReply(socksConn))
-
-	if reply.Rep != gosocks5.Succeeded {
-		ThrowFmt("service unavailable")
-	}
-
-	replyAddr := reply.Addr.String()
-
-	c.log.Debug("udp cmd reply success", "dstAddr", address, "replyAddr", replyAddr)
-
-	uc := Throw2(c.udpConnector.DialContext(ctx, "udp", replyAddr))
-
-	c.log.Debug("local udp addr", "addr", uc.LocalAddr().String())
-
-	//nolint:errcheck
-	go func() {
-		io.Copy(io.Discard, socksConn)
-		socksConn.Close()
-		// A UDP association terminates when the TCP connection that the UDP
-		// ASSOCIATE request arrived on terminates. RFC1928
-		uc.Close()
-	}()
-
-	if dstUDPAddr.IP.IsUnspecified() {
-		return socksConn, newSocksRawUDPConn(c.log, uc, socksConn)
-	}
-
-	return socksConn, newSocksUDPConn(uc, socksConn, dstUDPAddr)
-}
-
-func newSocksRawUDPConn(log *slog.Logger, udpConn net.Conn, tcpConn net.Conn) *socksRawUDPConn {
-	return &socksRawUDPConn{Conn: udpConn, log: log, tcpConn: tcpConn}
-}
-
-type socksRawUDPConn struct {
-	net.Conn
-	log     *slog.Logger
-	tcpConn net.Conn
-}
-
-func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
-	n, err = c.Conn.Write(b)
+// splitHostPort parses host:port into a host and a numeric port.
+func splitHostPort(address string) (string, uint16, error) {
+	host, portStr, err := net.SplitHostPort(address)
 
 	if err != nil {
-		c.log.Error("rawUDPConn error", "err", err)
+		return "", 0, err
 	}
 
-	return n, err
+	port, err := strconv.ParseUint(portStr, 10, 16)
+
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port in %s: %w", address, err)
+	}
+
+	return host, uint16(port), nil
 }
 
-func (c *socksRawUDPConn) Close() error {
-	err := c.Conn.Close()
+// udpSourceKey carries the source endpoint of a UDP flow in the dial context,
+// so that flows from one socket can share a SOCKS5 UDP association.
+type udpSourceKey struct{}
 
-	return errors.Join(err, c.tcpConn.Close())
+func withUDPSource(ctx context.Context, src string) context.Context {
+	return context.WithValue(ctx, udpSourceKey{}, src)
 }
 
-func newSocksUDPConn(udpConn net.Conn, tcpConn net.Conn, dstAddr *net.UDPAddr) *socksUDPConn {
-	return &socksUDPConn{Conn: udpConn, tcpConn: tcpConn, dstAddr: dstAddr}
+func udpSourceFromContext(ctx context.Context) (string, bool) {
+	src, ok := ctx.Value(udpSourceKey{}).(string)
+
+	return src, ok
 }
 
-type socksUDPConn struct {
-	net.Conn
-	tcpConn net.Conn
-	dstAddr *net.UDPAddr
-}
-
-var _ net.Conn = (*socksUDPConn)(nil)
-
-func (c *socksUDPConn) Read(b []byte) (n int, err error) {
-	err = Try(func() {
-		n = c.readFrom(b)
-	}).AsError()
-
-	return
-}
-
-func (c *socksUDPConn) Write(b []byte) (n int, err error) {
-	err = Try(func() {
-		c.writeTo(b, c.dstAddr)
-		n = len(b)
-	}).AsError()
-
-	return
-}
-
-func (c *socksUDPConn) writeTo(b []byte, addr net.Addr) {
-	toAddr := Throw2(gosocks5.NewAddr(addr.String()))
-
-	// TODO buffer pool
-	buf := &bytes.Buffer{}
-	h := &gosocks5.UDPHeader{Addr: toAddr}
-	Throw(h.Write(buf))
-	Throw2(buf.Write(b))
-	Throw2(c.Conn.Write(buf.Bytes()))
-}
-
-func (c *socksUDPConn) readFrom(b []byte) int {
-	rn := Throw2(c.Conn.Read(b))
-	packet := Throw2(gosocks5.ReadUDPDatagram(bytes.NewBuffer(b[:rn])))
-	copy(b, packet.Data)
-
-	return len(packet.Data)
-}
-
-func (c *socksUDPConn) Close() error {
-	err := c.Conn.Close()
-
-	return errors.Join(err, c.tcpConn.Close())
-}
+var errTUNRefused = errors.New("destination is the TUN address and has no -L mapping")
 
 type localForwardingConnector struct {
 	directConnector Connector
 	socksConnector  Connector
 	nat             AddressMapper
 	bypass          []*net.IPNet
+	tun             []*net.IPNet
 	nat64           *net.IPNet
 }
 
-func NewLocalForwardingConnector(directConnector Connector, socksConnector Connector, nat AddressMapper, bypass []*net.IPNet, nat64 *net.IPNet) Connector {
+func NewLocalForwardingConnector(directConnector Connector, socksConnector Connector, nat AddressMapper, bypass, tun []*net.IPNet, nat64 *net.IPNet) Connector {
 	return &localForwardingConnector{
 		directConnector: directConnector,
 		socksConnector:  socksConnector,
 		nat:             nat,
 		bypass:          bypass,
+		tun:             tun,
 		nat64:           nat64,
 	}
 }
 
 // DialContext picks the route for a destination: explicit -L mappings win,
-// then -B bypass networks go direct (through NAT64 on an IPv6-only host),
-// everything else goes to SOCKS. A NAT64-synthesized IPv6 destination is
-// unmapped to its embedded IPv4 first, so the IPv4 rules govern it.
+// then the TUN subnet itself is refused (nothing but wirez lives there, and a
+// proxy must not be asked to reach it), then -B bypass networks go direct
+// (through NAT64 on an IPv6-only host), everything else goes to the proxy. A
+// NAT64-synthesized IPv6 destination is unmapped to its embedded IPv4 first,
+// so the IPv4 rules govern it.
 func (c *localForwardingConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
 	address = nat64Unmap(c.nat64, address)
 
@@ -317,14 +127,20 @@ func (c *localForwardingConnector) DialContext(ctx context.Context, network, add
 		return c.directConnector.DialContext(ctx, network, newAddress)
 	}
 
-	if c.matchBypass(address) {
+	if matchNets(c.tun, address) {
+		return nil, fmt.Errorf("%s: %w", address, errTUNRefused)
+	}
+
+	if matchNets(c.bypass, address) {
 		return c.directConnector.DialContext(ctx, network, nat64Map(c.nat64, address))
 	}
 
 	return c.socksConnector.DialContext(ctx, network, address)
 }
 
-func (c *localForwardingConnector) matchBypass(address string) bool {
+// matchNets reports whether the literal IP of a host:port address falls into
+// one of the networks; names never match.
+func matchNets(nets []*net.IPNet, address string) bool {
 	host, _, err := net.SplitHostPort(address)
 
 	if err != nil {
@@ -337,7 +153,7 @@ func (c *localForwardingConnector) matchBypass(address string) bool {
 		return false
 	}
 
-	for _, n := range c.bypass {
+	for _, n := range nets {
 		if n.Contains(ip) {
 			return true
 		}

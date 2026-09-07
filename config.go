@@ -9,26 +9,38 @@ import (
 	"strings"
 )
 
-func parseProxyURL(proxyURL string) *SocksAddr {
+// ProxyAddr is one -F hop: a SOCKS5 or an HTTP CONNECT proxy.
+type ProxyAddr struct {
+	Scheme  string // "socks5" or "http"
+	Address string // host:port
+	Auth    *url.Userinfo
+}
+
+func parseProxyURL(proxyURL string) *ProxyAddr {
 	proxyURL = strings.Trim(proxyURL, " ")
 
 	if !strings.Contains(proxyURL, "//") {
 		proxyURL = "socks5://" + proxyURL
 	}
 
-	socksURL := Throw2(url.Parse(proxyURL))
+	u := Throw2(url.Parse(proxyURL))
+	scheme := u.Scheme
 
-	if socksURL.Scheme != "socks5" {
-		ThrowFmt("invalid socks5 scheme")
+	switch scheme {
+	case "socks5", "socks5h":
+		scheme = "socks5"
+	case "http":
+	default:
+		ThrowFmt("unsupported proxy scheme %q in %s: use socks5:// or http://", u.Scheme, proxyURL)
 	}
 
-	Throw3(net.SplitHostPort(socksURL.Host))
+	Throw3(net.SplitHostPort(u.Host))
 
-	return &SocksAddr{Address: socksURL.Host, Auth: socksURL.User}
+	return &ProxyAddr{Scheme: scheme, Address: u.Host, Auth: u.User}
 }
 
-func parseProxyURLs(proxyURLs []string) []*SocksAddr {
-	result := make([]*SocksAddr, 0, len(proxyURLs))
+func parseProxyURLs(proxyURLs []string) []*ProxyAddr {
+	result := make([]*ProxyAddr, 0, len(proxyURLs))
 
 	for _, proxyURL := range proxyURLs {
 		result = append(result, parseProxyURL(proxyURL))
@@ -84,6 +96,12 @@ func parseMapping(mapping string) (network, fromAddress, targetAddress string) {
 		network = "tcp"
 	} else {
 		network = parts[1]
+	}
+
+	switch network {
+	case "tcp", "udp":
+	default:
+		ThrowFmt("invalid protocol %q in mapping %s: use tcp or udp", network, mapping)
 	}
 
 	targetPort, rest := takeLastPort(parts[0])

@@ -2,14 +2,23 @@ package main
 
 import (
 	"net"
-	"strconv"
 	"testing"
+
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
-// dstAddress mirrors how network_stack.go builds the destination address
-// from a gVisor endpoint id.
+// dstAddress renders a destination the way the network stack does for a
+// forwarded connection.
 func dstAddress(host string, port uint16) string {
-	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+	ip := net.ParseIP(host)
+	addr := tcpip.AddrFrom16Slice(ip.To16())
+
+	if ip4 := ip.To4(); ip4 != nil {
+		addr = tcpip.AddrFrom4Slice(ip4)
+	}
+
+	return endpointAddress(&stack.TransportEndpointID{LocalAddress: addr, LocalPort: port})
 }
 
 func TestIPv6DestinationAddressIsValid(t *testing.T) {
@@ -36,7 +45,6 @@ func TestIPv6DestinationAddressIsValid(t *testing.T) {
 
 func TestIPv6BypassMatch(t *testing.T) {
 	bypass := parseBypassNets([]string{"fd00::/8", "2606:4700::/32", "10.0.0.0/8"})
-	c := &localForwardingConnector{bypass: bypass}
 
 	for _, tc := range []struct {
 		address string
@@ -47,9 +55,10 @@ func TestIPv6BypassMatch(t *testing.T) {
 		{dstAddress("2001:db8::1", 443), false},
 		{dstAddress("10.1.2.3", 80), true},
 		{dstAddress("8.8.8.8", 53), false},
+		{"example.com:80", false},
 	} {
-		if got := c.matchBypass(tc.address); got != tc.want {
-			t.Errorf("matchBypass(%q) = %v, want %v", tc.address, got, tc.want)
+		if got := matchNets(bypass, tc.address); got != tc.want {
+			t.Errorf("matchNets(%q) = %v, want %v", tc.address, got, tc.want)
 		}
 	}
 }
@@ -68,5 +77,17 @@ func TestIPv6AddressMapping(t *testing.T) {
 	// port-only rule applies to any IPv6 destination on that udp port
 	if got, ok := m.MapAddress("udp", dstAddress("2606:4700:4700::1111", 53)); !ok || got != "[::1]:5353" {
 		t.Errorf("port-only IPv6 map = %q, ok=%v; want %q", got, ok, "[::1]:5353")
+	}
+}
+
+func TestParseMappingRejectsUnknownProtocol(t *testing.T) {
+	for _, in := range []string{"53:1.1.1.1:53/tpc", "53:1.1.1.1:53/sctp"} {
+		if err := Try(func() { parseMapping(in) }); err == nil {
+			t.Errorf("parseMapping(%q) accepted", in)
+		}
+	}
+
+	if network, _, _ := parseMapping("53:1.1.1.1:53"); network != "tcp" {
+		t.Errorf("default protocol = %s, want tcp", network)
 	}
 }

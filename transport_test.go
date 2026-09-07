@@ -8,58 +8,6 @@ import (
 	"time"
 )
 
-const testTimeout = 5 * time.Second
-
-// tcpPair returns both ends of a TCP connection over loopback.
-func tcpPair(t *testing.T) (client, server *net.TCPConn) {
-	t.Helper()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer ln.Close()
-
-	accepted := make(chan net.Conn, 1)
-
-	go func() {
-		c, err := ln.Accept()
-
-		if err != nil {
-			c = nil
-		}
-
-		accepted <- c
-	}()
-
-	c, err := net.Dial("tcp", ln.Addr().String())
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	s := <-accepted
-
-	if s == nil {
-		c.Close()
-		t.Fatal("accept failed")
-	}
-
-	client, server = c.(*net.TCPConn), s.(*net.TCPConn)
-	deadline := time.Now().Add(testTimeout)
-	client.SetDeadline(deadline)
-	server.SetDeadline(deadline)
-
-	t.Cleanup(func() {
-		client.Close()
-		server.Close()
-	})
-
-	return client, server
-}
-
 func waitTransport(t *testing.T, done <-chan error) error {
 	t.Helper()
 

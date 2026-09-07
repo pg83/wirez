@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestDialOrderMappingBeforeBypass(t *testing.T) {
 	socks := &recordingConnector{"socks", &dialed, &last}
 	nat := parseAddressMapper([]string{"37933:127.0.0.1:37933/tcp"})
 	bypass := parseBypassNets([]string{"10.0.0.0/8", "5.255.192.0/18"})
-	c := NewLocalForwardingConnector(direct, socks, nat, bypass, nat64Prefix(t))
+	c := NewLocalForwardingConnector(direct, socks, nat, bypass, nil, nat64Prefix(t))
 
 	for _, tc := range []struct {
 		address string
@@ -96,6 +97,51 @@ func TestDialOrderMappingBeforeBypass(t *testing.T) {
 
 		if dialed != tc.via || last != tc.target {
 			t.Errorf("dial %q: via %s to %q, want via %s to %q", tc.address, dialed, last, tc.via, tc.target)
+		}
+	}
+}
+
+// The TUN subnet is nobody's: without an -L mapping a connection to it is
+// refused instead of being handed to the proxy or, worse, to a LAN host that
+// happens to share the range with a -B network.
+func TestDialRefusesTUNWithoutMapping(t *testing.T) {
+	var dialed, last string
+
+	direct := &recordingConnector{"direct", &dialed, &last}
+	socks := &recordingConnector{"socks", &dialed, &last}
+	nat := parseAddressMapper([]string{"10.1.1.2:9:127.0.0.1:9/tcp"})
+	bypass := parseBypassNets([]string{"10.0.0.0/8"})
+	tun := parseBypassNets([]string{tunNetworkAddr, tunNetworkAddrV6})
+	c := NewLocalForwardingConnector(direct, socks, nat, bypass, tun, nil)
+
+	for _, address := range []string{"10.1.1.2:80", "10.1.1.7:443", "[2001:db8:1:1::2]:80"} {
+		dialed = ""
+		_, err := c.DialContext(context.Background(), "tcp", address)
+
+		if !errors.Is(err, errTUNRefused) {
+			t.Errorf("dial %q: err = %v, want refusal", address, err)
+		}
+
+		if dialed != "" {
+			t.Errorf("dial %q went via %s to %q", address, dialed, last)
+		}
+	}
+
+	for _, tc := range []struct {
+		address string
+		via     string
+		target  string
+	}{
+		// an explicit mapping still wins
+		{"10.1.1.2:9", "direct", "127.0.0.1:9"},
+		// the rest of the -B network is unaffected
+		{"10.2.0.1:80", "direct", "10.2.0.1:80"},
+		{"[2001:db8:2::1]:80", "socks", "[2001:db8:2::1]:80"},
+	} {
+		_, err := c.DialContext(context.Background(), "tcp", tc.address)
+
+		if err != nil || dialed != tc.via || last != tc.target {
+			t.Errorf("dial %q: via %s to %q, %v; want via %s to %q", tc.address, dialed, last, err, tc.via, tc.target)
 		}
 	}
 }

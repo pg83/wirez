@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/vishvananda/netlink"
@@ -38,21 +39,27 @@ func runContainer(args []string) {
 	Throw(fs.Parse(args))
 	Throw(syscall.Sethostname([]byte(*hostname)))
 
+	// Neither the control socket nor the network descriptors below belong to
+	// the application that is exec'd at the end.
+	unix.CloseOnExec(*pipeFd)
+
 	childConn := newChildUnixSocketConn(*pipeFd)
 	defer childConn.Close()
 
 	tunFd := Throw2(tun.Open(tunDevice))
 	defer unix.Close(tunFd)
+	unix.CloseOnExec(tunFd)
 
 	fds := []int{tunFd}
 
 	if *dns {
 		setupLoopback()
 
-		dnsFd := createResolverSocket()
-		defer unix.Close(dnsFd)
+		udpFd, tcpFd := createResolverSockets()
+		defer unix.Close(udpFd)
+		defer unix.Close(tcpFd)
 
-		fds = append(fds, dnsFd)
+		fds = append(fds, udpFd, tcpFd)
 	}
 
 	childConn.SendFds(fds...)
@@ -66,8 +73,8 @@ func runContainer(args []string) {
 	setupIPNetwork(*ipv6)
 
 	makeMountsPrivate()
-	bindMountFile("/etc/resolv.conf", resolvConfContent(*dns))
-	bindMountFile("/etc/hosts", hostsContent(*hostname))
+	bindMountFile("/etc/resolv.conf", resolvConfContent(*dns, readHostFile("/etc/resolv.conf")))
+	bindMountFile("/etc/hosts", hostsContent(*hostname, readHostFile("/etc/hosts")))
 
 	cmdArgs := fs.Args()
 	proc := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -75,20 +82,20 @@ func runContainer(args []string) {
 	proc.Stdout = os.Stdout
 	proc.Stderr = os.Stderr
 
+	// Without this process the container has no network, so the application
+	// must not outlive it.
+	proc.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+
 	if *privileged {
-		proc.SysProcAttr = &syscall.SysProcAttr{
-			Credential: &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)},
-		}
+		proc.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)}
 	} else if *uid != 0 {
-		proc.SysProcAttr = &syscall.SysProcAttr{
-			Cloneflags: syscall.CLONE_NEWUSER,
-			Credential: &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)},
-			UidMappings: []syscall.SysProcIDMap{
-				{ContainerID: *uid, HostID: os.Geteuid(), Size: 1},
-			},
-			GidMappings: []syscall.SysProcIDMap{
-				{ContainerID: *gid, HostID: os.Getegid(), Size: 1},
-			},
+		proc.SysProcAttr.Cloneflags = syscall.CLONE_NEWUSER
+		proc.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(*uid), Gid: uint32(*gid)}
+		proc.SysProcAttr.UidMappings = []syscall.SysProcIDMap{
+			{ContainerID: *uid, HostID: os.Geteuid(), Size: 1},
+		}
+		proc.SysProcAttr.GidMappings = []syscall.SysProcIDMap{
+			{ContainerID: *gid, HostID: os.Getegid(), Size: 1},
 		}
 	}
 
@@ -148,12 +155,20 @@ func setupLoopback() {
 	Throw(netlink.LinkSetUp(lo))
 }
 
-func createResolverSocket() int {
-	fd := Throw2(unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0))
+// createResolverSockets binds the resolver's UDP socket and TCP listener to
+// 127.0.0.1:53 inside the container; both are served from the host netns.
+func createResolverSockets() (udpFd, tcpFd int) {
+	addr := &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 1}}
 
-	Throw(unix.Bind(fd, &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 1}}))
+	udpFd = Throw2(unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0))
+	Throw(unix.Bind(udpFd, addr))
 
-	return fd
+	tcpFd = Throw2(unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0))
+	Throw(unix.SetsockoptInt(tcpFd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1))
+	Throw(unix.Bind(tcpFd, addr))
+	Throw(unix.Listen(tcpFd, unix.SOMAXCONN))
+
+	return udpFd, tcpFd
 }
 
 func setupIPNetwork(ipv6 bool) {
@@ -189,15 +204,32 @@ func makeMountsPrivate() {
 }
 
 // bindMountFile shadows target with a file of the given content that lives
-// on a private tmpfs, so the host filesystem is never touched. Requires
-// makeMountsPrivate to have been called first.
+// on a tmpfs private to the container, so the host filesystem is never
+// touched. Requires makeMountsPrivate to have been called first.
 func bindMountFile(target, content string) {
+	// The staging directory is created on the host filesystem, so it is
+	// removed again once the bind mount holds the file on its own.
 	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-"))
 	Throw(unix.Mount("tmpfs", tmpDir, "tmpfs", 0, "size=4k"))
 
 	tmpFile := filepath.Join(tmpDir, filepath.Base(target))
 	Throw(os.WriteFile(tmpFile, []byte(content), 0644))
 	Throw(unix.Mount(tmpFile, target, "", unix.MS_BIND, ""))
+
+	Throw(unix.Unmount(tmpDir, unix.MNT_DETACH))
+	Throw(os.Remove(tmpDir))
+}
+
+// readHostFile returns the host's version of a file, or nothing when it
+// cannot be read.
+func readHostFile(path string) string {
+	data, err := os.ReadFile(path)
+
+	if err != nil {
+		return ""
+	}
+
+	return string(data)
 }
 
 // tunPeerAddr is the address right after the TUN address in its subnet. The
@@ -213,31 +245,56 @@ func tunPeerAddr() net.IP {
 
 // resolvConfContent points the container at the local resolver when one is
 // running and at the TUN peer address otherwise, so DNS goes through wirez.
-func resolvConfContent(dns bool) string {
+// The host's search list and options are kept so that short names resolve
+// the same way inside.
+func resolvConfContent(dns bool, hostResolv string) string {
 	nameserver := "127.0.0.1"
 
 	if !dns {
 		nameserver = tunPeerAddr().String()
 	}
 
-	return "nameserver " + nameserver + "\n"
+	var b strings.Builder
+
+	b.WriteString("nameserver " + nameserver + "\n")
+
+	for _, line := range strings.Split(hostResolv, "\n") {
+		fields := strings.Fields(line)
+
+		if len(fields) == 0 {
+			continue
+		}
+
+		switch fields[0] {
+		case "search", "domain", "options", "sortlist":
+			b.WriteString(strings.Join(fields, " ") + "\n")
+		}
+	}
+
+	return b.String()
 }
 
-// hostsContent maps localhost to the loopback addresses first, so that
-// programs binding "localhost" get an address that exists inside the
-// container (127.0.0.1/::1), and to the TUN peer address last: connections to
-// it traverse the TUN and can be redirected with -L, and clients that iterate
-// over getaddrinfo() results reach it after the loopback ones are refused.
-// The container hostname resolves to loopback so that FQDN lookups
-// (getaddrinfo(hostname, AI_CANONNAME)) succeed.
-func hostsContent(hostname string) string {
+// hostsContent keeps the host's entries and appends wirez's own: localhost on
+// the loopback addresses, so programs binding "localhost" get an address that
+// exists inside the container, and on the TUN peer address last, where -L can
+// redirect it (without a mapping the connection is refused). The container
+// hostname resolves to loopback so that FQDN lookups (getaddrinfo(hostname,
+// AI_CANONNAME)) succeed.
+func hostsContent(hostname, hostHosts string) string {
 	fqdn := hostname + " " + hostname + ".localdomain"
-
-	return "127.0.0.1 localhost\n" +
+	own := "127.0.0.1 localhost\n" +
 		"::1 localhost\n" +
 		tunPeerAddr().String() + " localhost\n" +
 		"127.0.0.1 " + fqdn + "\n" +
 		"::1 " + fqdn + "\n"
+
+	hostHosts = strings.TrimRight(hostHosts, "\n")
+
+	if hostHosts == "" {
+		return own
+	}
+
+	return hostHosts + "\n" + own
 }
 
 func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {

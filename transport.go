@@ -36,17 +36,7 @@ func (c *TimeoutConn) Write(b []byte) (n int, err error) {
 
 // CloseWrite half-closes the wrapped connection when it supports that.
 func (c *TimeoutConn) CloseWrite() error {
-	if cw, ok := c.Conn.(closeWriter); ok {
-		return cw.CloseWrite()
-	}
-
-	return errors.ErrUnsupported
-}
-
-// closeWriter is implemented by stream connections that can shut down their
-// sending side alone (net.TCPConn, gonet.TCPConn, TimeoutConn, socks5Conn).
-type closeWriter interface {
-	CloseWrite() error
+	return closeWrite(c.Conn)
 }
 
 type Transporter interface {
