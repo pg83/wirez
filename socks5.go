@@ -338,8 +338,8 @@ type associationSlot struct {
 }
 
 // DialContext returns a connection to one UDP destination through the proxy.
-// When the context names the source endpoint of the flow, flows from that
-// source share a single UDP association, as a NAT shares one external port.
+// The context names the source endpoint of the flow; flows from one source
+// share a single UDP association, as a NAT shares one external port.
 func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	if network != "udp" {
 		return nil, fmt.Errorf("socks5: network %s is not supported", network)
@@ -351,20 +351,12 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 		return nil, err
 	}
 
-	if src, ok := udpSourceFromContext(ctx); ok {
-		return c.dialShared(ctx, src, host, port)
+	src, ok := udpSourceFromContext(ctx)
+
+	if !ok {
+		return nil, errors.New("socks5: udp dial without a source endpoint")
 	}
 
-	control, relay, err := c.associate(ctx)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &socksUDPConn{relay: relay, control: control, host: host, port: port}, nil
-}
-
-func (c *socks5UDPConnector) dialShared(ctx context.Context, src, host string, port uint16) (net.Conn, error) {
 	for {
 		a, err := c.association(ctx, src)
 
@@ -487,61 +479,4 @@ func (c *socks5UDPConnector) associate(ctx context.Context) (control, relay net.
 	}()
 
 	return control, relay, nil
-}
-
-// socksUDPConn is a dedicated association carrying one flow: datagrams are
-// wrapped for a fixed destination and replies are unwrapped.
-type socksUDPConn struct {
-	relay   net.Conn
-	control net.Conn
-	host    string
-	port    uint16
-}
-
-func (c *socksUDPConn) Read(b []byte) (int, error) {
-	n, err := c.relay.Read(b)
-
-	if err != nil {
-		return 0, err
-	}
-
-	_, _, payload, err := socks5ParseUDPDatagram(b[:n])
-
-	if err != nil {
-		return 0, err
-	}
-
-	return copy(b, payload), nil
-}
-
-func (c *socksUDPConn) Write(b []byte) (int, error) {
-	if _, err := c.relay.Write(socks5UDPDatagram(c.host, c.port, b)); err != nil {
-		return 0, err
-	}
-
-	return len(b), nil
-}
-
-func (c *socksUDPConn) Close() error {
-	return errors.Join(c.relay.Close(), c.control.Close())
-}
-
-func (c *socksUDPConn) LocalAddr() net.Addr {
-	return c.relay.LocalAddr()
-}
-
-func (c *socksUDPConn) RemoteAddr() net.Addr {
-	return &net.UDPAddr{IP: net.ParseIP(c.host), Port: int(c.port)}
-}
-
-func (c *socksUDPConn) SetDeadline(t time.Time) error {
-	return c.relay.SetDeadline(t)
-}
-
-func (c *socksUDPConn) SetReadDeadline(t time.Time) error {
-	return c.relay.SetReadDeadline(t)
-}
-
-func (c *socksUDPConn) SetWriteDeadline(t time.Time) error {
-	return c.relay.SetWriteDeadline(t)
 }

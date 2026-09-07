@@ -288,7 +288,18 @@ class Socks5Server(TcpServer):
         self.lock = threading.Lock()
         self.connects = []
         self.associations = 0
+        self.controls = []
         super().__init__()
+
+    def drop_associations(self):
+        """Ends every UDP association the way a restarted proxy would."""
+        with self.lock:
+            controls, self.controls = self.controls, []
+        for control in controls:
+            try:
+                control.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def handle(self, conn):
         read = lambda n: recv_exact(conn, n)
@@ -341,6 +352,7 @@ class Socks5Server(TcpServer):
         out.bind(("127.0.0.1", 0))
         with self.lock:
             self.associations += 1
+            self.controls.append(control)
         state = {"client": None, "requested": {}}
         lock = threading.Lock()
 
