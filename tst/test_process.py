@@ -24,7 +24,11 @@ class ProcessTest(lib.ContainerTest):
         self.assertEqual(result.returncode, 137)
 
     def test_uid_and_gid(self):
-        self.assertEqual(lib.in_container([*self.flags, "-uid", "12345", "-gid", "12345"], "id"), "12345 12345")
+        # not client.py: a foreign uid cannot read a checkout under a 0750
+        # home, and the point is the ids, not the client
+        program = "import os; print(os.getuid(), os.getgid(), end='')"
+        result = lib.wirez(*self.flags, "-uid", "12345", "-gid", "12345", "--", sys.executable, "-I", "-c", program)
+        self.assertEqual(result.stdout, "12345 12345")
 
     def test_no_descriptor_leaks_into_the_program(self):
         baseline = subprocess.run([sys.executable, lib.CLIENT, "fds"], capture_output=True, text=True, check=True)
