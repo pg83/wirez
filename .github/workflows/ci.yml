@@ -112,7 +112,8 @@ jobs:
           WIREZ_TEST_CONTAINER_REQUIRED: "1"
         run: |
           set -o pipefail
-          sudo --preserve-env=PATH,WIREZ_TEST_CONTAINER_REQUIRED nix --extra-experimental-features 'nix-command flakes' develop -c ./build -B .build-root -j "$(nproc)" -Dcoverage coverage 2>&1 | tee "$RUNNER_TEMP/build.log"
+          # sudoers' secure_path wins over --preserve-env=PATH, so nix by its full path
+          sudo --preserve-env=PATH,WIREZ_TEST_CONTAINER_REQUIRED "$(command -v nix)" --extra-experimental-features 'nix-command flakes' develop -c ./build -B .build-root -j "$(nproc)" -Dcoverage coverage 2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: Report failure
         if: failure()
