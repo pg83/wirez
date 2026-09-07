@@ -1,8 +1,12 @@
 # build runner output
 /.build/
 /.build-*/
-# symlinks ./build publishes for explicit targets
+# symlinks ./build publishes for explicitly named targets
 /wirez
+/gofmt
+/go_vet
+/go_test
+/it_*
 
 proxies.txt
 __pycache__/
