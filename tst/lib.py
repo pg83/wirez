@@ -632,16 +632,45 @@ def reexec_in_netns(setup=(), mount=False):
     prelude = " && ".join(
         shlex.join([str(a) for a in argv]) for argv in ([["ip", "link", "set", "lo", "up"], *setup])
     )
-    drop = shlex.join(["unshare", "-U", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"])
     env = dict(os.environ, WIREZ_TEST_NETNS="1")
     # a mount namespace too, when the test wants to bind its own files over
     # the host's (setup commands run as root in it)
-    flags = ["-r", "-n", "-m"] if mount else ["-r", "-n"]
+    namespaces = ["-n", "-m"] if mount else ["-n"]
+    if real_root():
+        # Real root needs no user namespace for the setup, and must not run
+        # the test in one: root inside a user namespace has no CAP_DAC_OVERRIDE
+        # over the host's files. The test then runs as the checkout's owner,
+        # which also keeps wirez on the rootless path these tests are about;
+        # the temp dir and the coverage dir become its own.
+        owner = os.stat(__file__)
+        handover = " && ".join([
+            'TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/asuser.XXXXXX")',
+            f'chown {owner.st_uid}:{owner.st_gid} "$TMPDIR"',
+            "export TMPDIR",
+            'HOME="$TMPDIR"',
+            "export HOME",
+            f'if [ -n "$GOCOVERDIR" ]; then chown {owner.st_uid}:{owner.st_gid} "$GOCOVERDIR"; fi',
+        ])
+        drop = shlex.join(["setpriv", f"--reuid={owner.st_uid}", f"--regid={owner.st_gid}", "--clear-groups"])
+        flags = namespaces
+    else:
+        handover = "true"
+        drop = shlex.join(["unshare", "-U", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"])
+        flags = ["-r", *namespaces]
     result = subprocess.run(
-        ["unshare", *flags, "sh", "-c", f'{prelude} && exec {drop} "$@"', "sh", sys.executable, *sys.argv],
+        ["unshare", *flags, "sh", "-c", f'{prelude} && {handover} && exec {drop} "$@"', "sh", sys.executable, *sys.argv],
         env=env, check=False,
     )
     sys.exit(result.returncode)
+
+
+def real_root():
+    """Root in the initial user namespace, as opposed to root inside one."""
+    if os.geteuid() != 0:
+        return False
+    with open("/proc/self/uid_map") as stream:
+        fields = stream.read().split()
+    return len(fields) >= 3 and int(fields[2]) > 1
 
 
 # --- real programs as workloads ---------------------------------------------
