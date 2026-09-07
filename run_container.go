@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/vishvananda/netlink"
@@ -63,8 +64,10 @@ func runContainer(args []string) {
 	childConn.ReceiveACK()
 
 	setupIPNetwork(*ipv6)
-	setupResolvConf(*dns)
-	setupHosts(*hostname)
+
+	makeMountsPrivate()
+	bindMountFile("/etc/resolv.conf", resolvConfContent(*dns))
+	bindMountFile("/etc/hosts", hostsContent(*hostname))
 
 	cmdArgs := fs.Args()
 	proc := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -179,56 +182,62 @@ func setupIPNetwork(ipv6 bool) {
 	}))
 }
 
-func setupResolvConf(dns bool) {
-	// Prevent mount propagation to the host.
+// makeMountsPrivate stops the bind mounts made by bindMountFile from
+// propagating to the host.
+func makeMountsPrivate() {
 	Throw(unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""))
-
-	// With a local resolver, point at 127.0.0.1. Otherwise use the next IP in
-	// the TUN subnet as nameserver, because the TUN IP itself is a local
-	// address and packets to it don't traverse the TUN device.
-	nameserver := "127.0.0.1"
-
-	if !dns {
-		ip, _ := Throw3(net.ParseCIDR(tunNetworkAddr))
-		ip = ip.To4()
-		ip[3]++
-		nameserver = ip.String()
-	}
-
-	// Write resolv.conf to a tmpfs so we don't touch the host filesystem.
-	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-resolv-"))
-	Throw(unix.Mount("tmpfs", tmpDir, "tmpfs", 0, "size=4k"))
-
-	tmpFile := tmpDir + "/resolv.conf"
-
-	Throw(os.WriteFile(tmpFile, []byte("nameserver "+nameserver+"\n"), 0644))
-	// Bind mount over /etc/resolv.conf.
-	Throw(unix.Mount(tmpFile, "/etc/resolv.conf", "", unix.MS_BIND, ""))
 }
 
-func setupHosts(hostname string) {
+// bindMountFile shadows target with a file of the given content that lives
+// on a private tmpfs, so the host filesystem is never touched. Requires
+// makeMountsPrivate to have been called first.
+func bindMountFile(target, content string) {
+	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-"))
+	Throw(unix.Mount("tmpfs", tmpDir, "tmpfs", 0, "size=4k"))
+
+	tmpFile := filepath.Join(tmpDir, filepath.Base(target))
+	Throw(os.WriteFile(tmpFile, []byte(content), 0644))
+	Throw(unix.Mount(tmpFile, target, "", unix.MS_BIND, ""))
+}
+
+// tunPeerAddr is the address right after the TUN address in its subnet. The
+// TUN address itself is local and packets to it never traverse the device;
+// this one is reached through the TUN and therefore through wirez.
+func tunPeerAddr() net.IP {
 	ip, _ := Throw3(net.ParseCIDR(tunNetworkAddr))
 	ip = ip.To4()
 	ip[3]++
 
-	// localhost resolves to the loopback addresses first, so that programs
-	// binding "localhost" get an address that exists inside the container
-	// (127.0.0.1/::1); the TUN peer address comes last: connections to it
-	// traverse the TUN and can be redirected with -L, and clients that
-	// iterate over getaddrinfo() results reach it after the loopback ones
-	// are refused. The container hostname resolves to loopback so that
-	// FQDN lookups (getaddrinfo(hostname, AI_CANONNAME)) succeed.
-	hosts := "127.0.0.1 localhost\n::1 localhost\n" + ip.String() + " localhost\n" +
-		"127.0.0.1 " + hostname + " " + hostname + ".localdomain\n" +
-		"::1 " + hostname + " " + hostname + ".localdomain\n"
+	return ip
+}
 
-	tmpDir := Throw2(os.MkdirTemp(os.TempDir(), "wirez-hosts-"))
-	Throw(unix.Mount("tmpfs", tmpDir, "tmpfs", 0, "size=4k"))
+// resolvConfContent points the container at the local resolver when one is
+// running and at the TUN peer address otherwise, so DNS goes through wirez.
+func resolvConfContent(dns bool) string {
+	nameserver := "127.0.0.1"
 
-	tmpFile := tmpDir + "/hosts"
+	if !dns {
+		nameserver = tunPeerAddr().String()
+	}
 
-	Throw(os.WriteFile(tmpFile, []byte(hosts), 0644))
-	Throw(unix.Mount(tmpFile, "/etc/hosts", "", unix.MS_BIND, ""))
+	return "nameserver " + nameserver + "\n"
+}
+
+// hostsContent maps localhost to the loopback addresses first, so that
+// programs binding "localhost" get an address that exists inside the
+// container (127.0.0.1/::1), and to the TUN peer address last: connections to
+// it traverse the TUN and can be redirected with -L, and clients that iterate
+// over getaddrinfo() results reach it after the loopback ones are refused.
+// The container hostname resolves to loopback so that FQDN lookups
+// (getaddrinfo(hostname, AI_CANONNAME)) succeed.
+func hostsContent(hostname string) string {
+	fqdn := hostname + " " + hostname + ".localdomain"
+
+	return "127.0.0.1 localhost\n" +
+		"::1 localhost\n" +
+		tunPeerAddr().String() + " localhost\n" +
+		"127.0.0.1 " + fqdn + "\n" +
+		"::1 " + fqdn + "\n"
 }
 
 func setupIPAddress(device, networkAddr string) (netlink.Link, *netlink.Addr) {

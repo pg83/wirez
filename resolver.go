@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/binary"
+	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -100,19 +103,22 @@ func startDNSResolver(log *slog.Logger, fd int, upstream string, policy *dnsPoli
 	go serveDNS(log, conn, upstream, policy)
 }
 
+// serveDNS answers queries on conn until it is closed.
 func serveDNS(log *slog.Logger, conn net.PacketConn, upstream string, policy *dnsPolicy) {
 	for {
 		buf := make([]byte, dnsBufferSize)
 		n, addr, err := conn.ReadFrom(buf)
 
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				continue
-			}
-
-			log.Debug("dns: listener closed", "err", err)
+		if errors.Is(err, net.ErrClosed) {
+			log.Debug("dns: listener closed")
 
 			return
+		}
+
+		if err != nil {
+			log.Debug("dns: read error", "err", err)
+
+			continue
 		}
 
 		query := buf[:n:n]
@@ -193,7 +199,27 @@ func emptyResponse(query dnsmessage.Header, question dnsmessage.Question) []byte
 	return Throw2(builder.Finish())
 }
 
+// forwardDNS sends the query to the upstream over UDP and, when the answer
+// comes back truncated (TC bit set), fetches the complete one over TCP.
 func forwardDNS(query []byte, upstream string) []byte {
+	resp := forwardDNSUDP(query, upstream)
+
+	if !isTruncated(resp) {
+		return resp
+	}
+
+	return forwardDNSTCP(query, upstream)
+}
+
+func isTruncated(resp []byte) bool {
+	var parser dnsmessage.Parser
+
+	header, err := parser.Start(resp)
+
+	return err == nil && header.Truncated
+}
+
+func forwardDNSUDP(query []byte, upstream string) []byte {
 	conn := Throw2(net.DialTimeout("udp", upstream, dnsUpstreamTimeout))
 	defer conn.Close()
 
@@ -204,4 +230,26 @@ func forwardDNS(query []byte, upstream string) []byte {
 	n := Throw2(conn.Read(resp))
 
 	return resp[:n]
+}
+
+// forwardDNSTCP speaks DNS over TCP (RFC 1035 section 4.2.2): every message
+// is prefixed with its length as a 16-bit big-endian integer.
+func forwardDNSTCP(query []byte, upstream string) []byte {
+	conn := Throw2(net.DialTimeout("tcp", upstream, dnsUpstreamTimeout))
+	defer conn.Close()
+
+	Throw(conn.SetDeadline(time.Now().Add(dnsUpstreamTimeout)))
+
+	msg := make([]byte, 2+len(query))
+	binary.BigEndian.PutUint16(msg, uint16(len(query)))
+	copy(msg[2:], query)
+	Throw2(conn.Write(msg))
+
+	var length [2]byte
+	Throw2(io.ReadFull(conn, length[:]))
+
+	resp := make([]byte, binary.BigEndian.Uint16(length[:]))
+	Throw2(io.ReadFull(conn, resp))
+
+	return resp
 }

@@ -7,6 +7,25 @@ import (
 	"os/exec"
 )
 
+// usageText has to describe every flag declared in newRunFlagSet;
+// TestUsageMentionsEveryFlag keeps the two in sync.
+const usageText = `Usage: wirez [flags] command
+
+Proxy application traffic through the socks5 server.
+
+Flags:
+  -F address    socks5 proxy address to forward TCP/UDP packets
+  -L mapping    local address mapping [target_host:]port:host:hostport[/proto]
+  -B cidr       bypass CIDR — destinations in this network go direct, not via SOCKS
+  -D address    upstream DNS for the local resolver on 127.0.0.1:53 (IPv4-only unless -6)
+  -6            enable IPv6 on the TUN; AAAA answers are kept only for -B networks
+  -nat64 prefix NAT64 /96 prefix of the host, e.g. 64:ff9b::/96
+  -v            log verbose level (repeat for more)
+  -q            suppress all log output
+  -uid int      set uid of container process
+  -gid int      set gid of container process
+`
+
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
@@ -35,18 +54,5 @@ func main() {
 }
 
 func printUsage() {
-	os.Stderr.WriteString(`Usage: wirez [flags] command
-
-Proxy application traffic through the socks5 server.
-
-Flags:
-  -F address    socks5 proxy address to forward TCP/UDP packets
-  -L mapping    local address mapping [target_host:]port:host:hostport[/proto]
-  -B cidr       bypass CIDR — destinations in this network go direct, not via SOCKS
-  -D address    upstream DNS for the local IPv4-only resolver on 127.0.0.1:53
-  -v            log verbose level (repeat for more)
-  -q            suppress all log output
-  -uid int      set uid of container process
-  -gid int      set gid of container process
-`)
+	os.Stderr.WriteString(usageText)
 }

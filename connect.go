@@ -96,7 +96,23 @@ func (c *socks5Connector) connect(ctx context.Context, network, address string) 
 		ThrowFmt("destination address [%s] is unavailable", dstAddr)
 	}
 
-	return cc
+	return &socks5Conn{Conn: cc, raw: conn}
+}
+
+// socks5Conn is an established SOCKS5 CONNECT stream. gosocks5.Conn hides the
+// transport connection, so half-closes are forwarded to it here; with proxy
+// chaining raw is itself a socks5Conn and the shutdown travels down the chain.
+type socks5Conn struct {
+	*gosocks5.Conn
+	raw net.Conn
+}
+
+func (c *socks5Conn) CloseWrite() error {
+	if cw, ok := c.raw.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+
+	return errors.ErrUnsupported
 }
 
 func NewSOCKS5UDPConnector(log *slog.Logger, tcpConnector Connector, udpConnector Connector, socksAddr *SocksAddr) Connector {
@@ -186,18 +202,19 @@ func (c *socks5UDPConnector) connect(ctx context.Context, network, address strin
 	}()
 
 	if dstUDPAddr.IP.IsUnspecified() {
-		return socksConn, newSocksRawUDPConn(uc, socksConn)
+		return socksConn, newSocksRawUDPConn(c.log, uc, socksConn)
 	}
 
 	return socksConn, newSocksUDPConn(uc, socksConn, dstUDPAddr)
 }
 
-func newSocksRawUDPConn(udpConn net.Conn, tcpConn net.Conn) *socksRawUDPConn {
-	return &socksRawUDPConn{Conn: udpConn, tcpConn: tcpConn}
+func newSocksRawUDPConn(log *slog.Logger, udpConn net.Conn, tcpConn net.Conn) *socksRawUDPConn {
+	return &socksRawUDPConn{Conn: udpConn, log: log, tcpConn: tcpConn}
 }
 
 type socksRawUDPConn struct {
 	net.Conn
+	log     *slog.Logger
 	tcpConn net.Conn
 }
 
@@ -205,7 +222,7 @@ func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
 
 	if err != nil {
-		slog.Error("rawUDPConn error", "err", err)
+		c.log.Error("rawUDPConn error", "err", err)
 	}
 
 	return n, err

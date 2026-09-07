@@ -44,7 +44,7 @@ Redirect TCP traffic to `10.10.10.10:2345` directly to `127.0.0.1:4567`:
 wirez -F 127.0.0.1:1234 -L 10.10.10.10:2345:127.0.0.1:4567/tcp bash
 ```
 
-Inside the container `localhost` resolves to the next TUN address first (so `-L` can redirect it) and then to `127.0.0.1`/`::1`, so servers listening on loopback inside the container are still reachable by name: the TUN address is refused for unmapped ports and clients fall back to loopback.
+Inside the container `localhost` resolves to `127.0.0.1`/`::1` first, so servers binding `localhost` get an address that exists there, and to the next TUN address last: connections to it traverse the TUN and can be redirected with `-L`, and clients that iterate over all addresses reach it once loopback has refused the connection.
 
 ### Bypass CIDR
 
@@ -86,7 +86,7 @@ The `-D` flag starts a tiny DNS resolver on `127.0.0.1:53` inside the container 
 wirez -F 127.0.0.1:1234 -D 1.1.1.1 -- curl example.com
 ```
 
-The upstream accepts a bare IPv4/IPv6 address (port 53 implied) or an explicit `host:port`.
+The upstream accepts a bare IPv4/IPv6 address (port 53 implied) or an explicit `host:port`. Answers that come back truncated over UDP (TC bit) are re-fetched over TCP.
 
 ### IPv6
 
@@ -106,7 +106,7 @@ wirez -F '[::1]:1080' -B 'fd00::/8' -L '53:[2606:4700:4700::1111]:53/udp' -- cur
 | `-D address` | Upstream DNS for the local resolver on `127.0.0.1:53` (forwarded direct, bypassing SOCKS); IPv4-only unless `-6` |
 | `-6` | Enable IPv6 on the TUN; AAAA answers are kept only for addresses reachable via `-B` |
 | `-nat64 prefix` | NAT64 `/96` prefix of the host: bypassed IPv4 is dialed through it, synthesized IPv6 is unmapped |
-| `-v` | Increase log verbosity (repeat for more: `-vv`, `-vvv`) |
+| `-v` | Increase log verbosity (repeat for more: `-v -v`) |
 | `-q` | Suppress all log output |
 | `-uid int` | Set UID of container process |
 | `-gid int` | Set GID of container process |
