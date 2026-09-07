@@ -167,20 +167,33 @@ func testClientMain(args []string) int {
 	return 0
 }
 
+// requireContainerSupport skips the test where the container cannot be
+// created, unless WIREZ_TEST_CONTAINER_REQUIRED is set: CI sets it so that
+// a silently skipped test cannot pass for a green run.
 func requireContainerSupport(t *testing.T) {
 	t.Helper()
+
+	unsupported := func(format string, args ...any) {
+		t.Helper()
+
+		if os.Getenv("WIREZ_TEST_CONTAINER_REQUIRED") != "" {
+			t.Fatalf(format, args...)
+		}
+
+		t.Skipf(format, args...)
+	}
 
 	f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
 
 	if err != nil {
-		t.Skipf("no TUN device: %v", err)
+		unsupported("no TUN device: %v", err)
 	}
 
 	f.Close()
 
 	if os.Geteuid() != 0 {
 		if out, err := exec.Command("unshare", "-r", "-n", "true").CombinedOutput(); err != nil {
-			t.Skipf("no unprivileged user namespaces: %v: %s", err, out)
+			unsupported("no unprivileged user namespaces: %v: %s", err, out)
 		}
 	}
 }

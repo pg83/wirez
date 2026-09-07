@@ -36,7 +36,11 @@ jobs:
         run: ./build -j "$(nproc)" wirez
 
       - name: Test
+        env:
+          WIREZ_TEST_CONTAINER_REQUIRED: "1"
         run: ./build -j "$(nproc)" test
 
       - name: Test with the race detector
+        env:
+          WIREZ_TEST_CONTAINER_REQUIRED: "1"
         run: ./build -j "$(nproc)" -Drace test

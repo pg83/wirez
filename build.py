@@ -1,3 +1,5 @@
+import os
+
 import build
 
 # wirez: transparent SOCKS5/HTTP proxifier for Linux, written in Go. The Go
@@ -83,8 +85,13 @@ go_vet = command(
 
 # The test binary doubles as wirez itself (see TestMain in integration_test.go)
 # and needs /dev/net/tun plus unprivileged user namespaces for the container
-# test; it skips that test where they are missing.
-go_test_env = dict(GO_ENV)
+# test; it skips that test where they are missing, unless
+# WIREZ_TEST_CONTAINER_REQUIRED is set (CI does), which turns the skip into a
+# failure. The variable is part of the node so that flipping it reruns the test.
+go_test_env = {
+    **GO_ENV,
+    "WIREZ_TEST_CONTAINER_REQUIRED": os.environ.get("WIREZ_TEST_CONTAINER_REQUIRED", ""),
+}
 go_test_cmd = ["go", "test", "-count=1", "-timeout=10m"]
 
 if build.flags.race:
