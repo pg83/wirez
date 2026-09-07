@@ -23,6 +23,12 @@ class Socks5UdpTest(lib.ContainerTest):
         self.assertEqual(out, "msg0 msg1 msg2")
         self.assertEqual(proxy.associations, 1)
 
+    def test_replies_with_ipv4_mapped_addresses_reach_their_flow(self):
+        echo = lib.UdpEchoServer()
+        proxy = lib.Socks5Server(udp_backend=echo.addr, reply_v4_mapped=True)
+        out = lib.in_container(["-F", proxy.addr], "udp-multi", "192.0.2.1:5353", "192.0.2.2:5354")
+        self.assertEqual(out, "msg0 msg1")
+
     def test_association_dropped_by_the_proxy_is_reopened(self):
         echo = lib.UdpEchoServer()
         proxy = lib.Socks5Server(udp_backend=echo.addr)

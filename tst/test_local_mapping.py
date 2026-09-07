@@ -20,6 +20,13 @@ class LocalMappingTest(lib.ContainerTest):
         self.assertEqual(lib.in_container(flags, "udp", "192.0.2.1:5353"), "ping?")
         self.assertEqual(proxy.associations, 0)
 
+    def test_ipv6_destination_mapping(self):
+        echo = lib.EchoServer()
+        proxy = lib.Socks5Server()
+        flags = ["-F", proxy.addr, "-6", "-L", f"[2001:db8::1]:443:{echo.addr}/tcp"]
+        self.assertEqual(lib.in_container(flags, "tcp", "[2001:db8::1]:443"), "echo:hello")
+        self.assertEqual(proxy.connects, [])
+
     def test_tun_peer_is_refused_without_mapping(self):
         proxy = lib.Socks5Server()
         self.assertEqual(lib.in_container(["-F", proxy.addr], "refused", "10.1.1.2:9"), "refused")

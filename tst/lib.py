@@ -279,12 +279,15 @@ class Socks5Server(TcpServer):
     bind address, as some real proxies do, and relays datagrams to their
     destination (or to udp_backend) with the requested address in replies."""
 
-    def __init__(self, backend=None, udp_backend=None, user=None, password=None, banner=b""):
+    def __init__(self, backend=None, udp_backend=None, user=None, password=None, banner=b"",
+                 reply_v4_mapped=False):
         self.backend = backend
         self.udp_backend = udp_backend
         self.user = user
         self.password = password
         self.banner = banner
+        # some proxies spell IPv4 sources of relayed datagrams as ::ffff:a.b.c.d
+        self.reply_v4_mapped = reply_v4_mapped
         self.lock = threading.Lock()
         self.connects = []
         self.associations = 0
@@ -383,6 +386,8 @@ class Socks5Server(TcpServer):
                     host, port = state["requested"].get(data, sender)
                 if self.udp_backend is None:
                     host, port = sender
+                if self.reply_v4_mapped and ":" not in host:
+                    host = "::ffff:" + host
                 relay_sock.sendto(socks_udp_datagram(host, port, data), client)
 
         for target in (inbound, outbound):

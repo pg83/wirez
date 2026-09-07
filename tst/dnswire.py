@@ -49,6 +49,15 @@ def build_query(name, qtype, ident=0x1234):
     return header + encode_name(name) + struct.pack("!HH", qtype, CLASS_IN)
 
 
+def parse_header(msg):
+    """Returns (ident, flags, qdcount, ancount)."""
+    return struct.unpack("!HHHH", msg[:8])
+
+
+def rcode(flags):
+    return flags & 0x000F
+
+
 def parse_question(msg):
     """Returns (ident, flags, name, qtype)."""
     ident, flags, qdcount = struct.unpack("!HHH", msg[:6])

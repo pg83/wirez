@@ -113,6 +113,24 @@ def mode_dns_tcp(name):
     sys.stdout.write(",".join(ips))
 
 
+def mode_dns_raw(name, qtype):
+    """Ask the local resolver over UDP and describe the answer on the wire."""
+    qtype = int(qtype)
+    query = dnswire.build_query(name, qtype, ident=0x4242)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(TIMEOUT)
+        sock.sendto(query, ("127.0.0.1", 53))
+        answer, _ = sock.recvfrom(65536)
+    ident, flags, qdcount, ancount = dnswire.parse_header(answer)
+    _, _, qname, aqtype = dnswire.parse_question(answer)
+    ips, truncated = dnswire.parse_answer_ips(answer)
+    sys.stdout.write(
+        f"id={ident:#x} response={int(bool(flags & dnswire.FLAG_RESPONSE))} "
+        f"rcode={dnswire.rcode(flags)} tc={int(truncated)} question={qname}/{aqtype} "
+        f"questions={qdcount} answers={ancount} ips={','.join(ips)}"
+    )
+
+
 def recv_exact(sock, size):
     data = b""
     while len(data) < size:
@@ -220,6 +238,7 @@ MODES = {
     "udp-twice": mode_udp_twice,
     "dns": mode_dns,
     "dns-tcp": mode_dns_tcp,
+    "dns-raw": mode_dns_raw,
     "refused": mode_refused,
     "idle": mode_idle,
     "ping": mode_ping,

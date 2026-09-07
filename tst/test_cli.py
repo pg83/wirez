@@ -35,6 +35,20 @@ class CliTest(unittest.TestCase):
             self.assertIn(needle, result.stderr, flags)
 
 
+class AllFlagsTest(lib.ContainerTest):
+    def test_every_flag_is_accepted_together(self):
+        proxy = lib.Socks5Server()
+        flags = [
+            "-F", proxy.addr, "-F", f"socks5h://{proxy.addr}",
+            "-L", "53:127.0.0.1:5353/udp", "-B", "198.51.100.0/24",
+            "-D", "192.0.2.53", "-D", "192.0.2.54:5353",
+            "-6", "-nat64", "64:ff9b::/96",
+            "-connect-timeout", "7s", "-tcp-timeout", "1m", "-udp-timeout", "30s",
+            "-v", "-v", "-q", "-uid", str(lib.os.getuid()), "-gid", str(lib.os.getgid()),
+        ]
+        self.assertEqual(lib.in_container(flags, "id"), f"{lib.os.getuid()} {lib.os.getgid()}")
+
+
 class LoggingTest(lib.ContainerTest):
     def test_quiet_suppresses_logs_and_verbose_shows_them(self):
         proxy = lib.Socks5Server(backend=lib.closed_tcp_port())

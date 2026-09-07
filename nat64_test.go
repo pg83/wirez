@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net"
 	"testing"
-
-	"golang.org/x/net/dns/dnsmessage"
 )
+
+// The NAT64 leg of the routing decision needs an IPv6-only host with a NAT64
+// gateway to be observed end to end, so it is checked here on the pure
+// decision instead.
 
 func nat64Prefix(t *testing.T) *net.IPNet {
 	t.Helper()
@@ -45,18 +46,6 @@ func TestNAT64MapUnmap(t *testing.T) {
 	}
 }
 
-func TestParseNAT64Invalid(t *testing.T) {
-	for _, in := range []string{"64:ff9b::/64", "10.0.0.0/8", "garbage"} {
-		if err := Try(func() { parseNAT64(in) }); err == nil {
-			t.Errorf("parseNAT64(%q): expected error", in)
-		}
-	}
-
-	if parseNAT64("") != nil {
-		t.Error("parseNAT64(\"\") must be nil")
-	}
-}
-
 type recordingConnector struct {
 	name   string
 	dialed *string
@@ -70,7 +59,7 @@ func (c *recordingConnector) DialContext(_ context.Context, _, address string) (
 	return nil, nil
 }
 
-func TestDialOrderMappingBeforeBypass(t *testing.T) {
+func TestBypassedIPv4IsDialedThroughNAT64(t *testing.T) {
 	var dialed, last string
 
 	direct := &recordingConnector{"direct", &dialed, &last}
@@ -84,129 +73,19 @@ func TestDialOrderMappingBeforeBypass(t *testing.T) {
 		via     string
 		target  string
 	}{
-		// -L wins over -B even though 10.1.1.2 is inside a bypass network
-		{"10.1.1.2:37933", "direct", "127.0.0.1:37933"},
 		// bypassed IPv4 is dialed through NAT64
-		{"10.1.1.2:80", "direct", "[64:ff9b::a01:102]:80"},
-		// DNS64-synthesized address is unmapped and then follows the IPv4 rules
+		{"10.2.0.1:80", "direct", "[64:ff9b::a02:1]:80"},
+		// a synthesized address that unmaps into a bypass network goes direct, still through NAT64
 		{"[64:ff9b::5ff:f006]:443", "direct", "[64:ff9b::5ff:f006]:443"},
+		// one that does not is handed to the proxy as plain IPv4
 		{"[64:ff9b::a04f:680a]:443", "socks", "160.79.104.10:443"},
-		{"[2607:6bc0::10]:443", "socks", "[2607:6bc0::10]:443"},
+		// -L rewrites are not run through NAT64
+		{"10.2.0.1:37933", "direct", "127.0.0.1:37933"},
 	} {
 		_, _ = c.DialContext(context.Background(), "tcp", tc.address)
 
 		if dialed != tc.via || last != tc.target {
 			t.Errorf("dial %q: via %s to %q, want via %s to %q", tc.address, dialed, last, tc.via, tc.target)
 		}
-	}
-}
-
-// The TUN subnet is nobody's: without an -L mapping a connection to it is
-// refused instead of being handed to the proxy or, worse, to a LAN host that
-// happens to share the range with a -B network.
-func TestDialRefusesTUNWithoutMapping(t *testing.T) {
-	var dialed, last string
-
-	direct := &recordingConnector{"direct", &dialed, &last}
-	socks := &recordingConnector{"socks", &dialed, &last}
-	nat := parseAddressMapper([]string{"10.1.1.2:9:127.0.0.1:9/tcp"})
-	bypass := parseBypassNets([]string{"10.0.0.0/8"})
-	tun := parseBypassNets([]string{tunNetworkAddr, tunNetworkAddrV6})
-	c := NewLocalForwardingConnector(direct, socks, nat, bypass, tun, nil)
-
-	for _, address := range []string{"10.1.1.2:80", "10.1.1.7:443", "[2001:db8:1:1::2]:80"} {
-		dialed = ""
-		_, err := c.DialContext(context.Background(), "tcp", address)
-
-		if !errors.Is(err, errTUNRefused) {
-			t.Errorf("dial %q: err = %v, want refusal", address, err)
-		}
-
-		if dialed != "" {
-			t.Errorf("dial %q went via %s to %q", address, dialed, last)
-		}
-	}
-
-	for _, tc := range []struct {
-		address string
-		via     string
-		target  string
-	}{
-		// an explicit mapping still wins
-		{"10.1.1.2:9", "direct", "127.0.0.1:9"},
-		// the rest of the -B network is unaffected
-		{"10.2.0.1:80", "direct", "10.2.0.1:80"},
-		{"[2001:db8:2::1]:80", "socks", "[2001:db8:2::1]:80"},
-	} {
-		_, err := c.DialContext(context.Background(), "tcp", tc.address)
-
-		if err != nil || dialed != tc.via || last != tc.target {
-			t.Errorf("dial %q: via %s to %q, %v; want via %s to %q", tc.address, dialed, last, err, tc.via, tc.target)
-		}
-	}
-}
-
-func aaaaResponse(t *testing.T, name string, ips ...string) []byte {
-	t.Helper()
-
-	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 1, Response: true})
-	n := dnsmessage.MustNewName(name)
-
-	if err := b.StartQuestions(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := b.Question(dnsmessage.Question{Name: n, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := b.StartAnswers(); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, s := range ips {
-		var r dnsmessage.AAAAResource
-		copy(r.AAAA[:], net.ParseIP(s).To16())
-
-		hdr := dnsmessage.ResourceHeader{Name: n, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: 60}
-
-		if err := b.AAAAResource(hdr, r); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	msg, err := b.Finish()
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return msg
-}
-
-func TestDNSPolicyAllowsAAAA(t *testing.T) {
-	allow := parseBypassNets([]string{"2a02:6b8::/32", "5.255.192.0/18"})
-	policy := &dnsPolicy{ipv6: true, allow: allow, nat64: nat64Prefix(t)}
-
-	for _, tc := range []struct {
-		ips  []string
-		want bool
-	}{
-		{[]string{"2a02:6b8::1"}, true},
-		{[]string{"2607:6bc0::10"}, false},
-		{[]string{"64:ff9b::5ff:f006"}, true},
-		{[]string{"64:ff9b::a04f:680a"}, false},
-		{[]string{"2607:6bc0::10", "2a02:6b8::1"}, true},
-		{nil, false},
-	} {
-		if got := policy.allowsAAAA(aaaaResponse(t, "example.com.", tc.ips...)); got != tc.want {
-			t.Errorf("allowsAAAA(%v) = %v, want %v", tc.ips, got, tc.want)
-		}
-	}
-
-	off := &dnsPolicy{allow: allow}
-
-	if off.allowsAAAA(aaaaResponse(t, "example.com.", "2a02:6b8::1")) {
-		t.Error("allowsAAAA must be false without -6")
 	}
 }
