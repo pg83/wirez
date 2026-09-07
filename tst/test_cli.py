@@ -28,6 +28,13 @@ class CliTest(unittest.TestCase):
             (["-F", "127.0.0.1:1", "-nat64", "64:ff9b::/64"], "must be an IPv6 /96"),
             (["-F", "127.0.0.1:1", "-tcp-timeout", "-1s"], "timeouts must be positive"),
             (["-F", "127.0.0.1:1", "-uid", "-1"], "uid is negative"),
+            (["-F", "127.0.0.1:1", "-gid", "-1"], "gid is negative"),
+            (["-F", "127.0.0.1:1", "-D", ""], "empty -D dns address"),
+            (["-F", "127.0.0.1:1", "-L", "53:[bad]:53/udp"], "invalid IPv6 address"),
+            (["-F", "127.0.0.1:1", "-L", "53:1.1.1.1]:53"], "invalid IPv6 address"),
+            (["-F", "127.0.0.1:1", "-L", "53:x[::1]:53"], "missing colon before host"),
+            (["-F", "127.0.0.1:1", "-L", "53::53"], "empty target host"),
+            (["-F", "127.0.0.1:1", "-L", "a:b:53:1.1.1.1:53"], "invalid source address"),
             (["-F", "127.0.0.1:1", "-bogus"], "flag provided but not defined"),
         ]:
             result = lib.wirez(*flags, "--", "true", check=False)
@@ -40,7 +47,7 @@ class AllFlagsTest(lib.ContainerTest):
         proxy = lib.Socks5Server()
         flags = [
             "-F", proxy.addr, "-F", f"socks5h://{proxy.addr}",
-            "-L", "53:127.0.0.1:5353/udp", "-B", "198.51.100.0/24",
+            "-L", "53:127.0.0.1:5353/udp", "-L", "8080:127.0.0.1:80", "-B", "198.51.100.0/24",
             "-D", "192.0.2.53", "-D", "192.0.2.54:5353",
             "-6", "-nat64", "64:ff9b::/96",
             "-connect-timeout", "7s", "-tcp-timeout", "1m", "-udp-timeout", "30s",
@@ -59,6 +66,9 @@ class LoggingTest(lib.ContainerTest):
         self.assertEqual(verbose.stdout, "refused")
         self.assertIn("level=DEBUG", verbose.stderr)
         self.assertIn("tcp: dial failed", verbose.stderr)
+        chatty = lib.in_container(["-F", proxy.addr, "-v", "-v"], "refused", "192.0.2.1:9", check=False)
+        self.assertEqual(chatty.stdout, "refused")
+        self.assertIn("level=DEBUG", chatty.stderr)
 
 
 class UdpTimeoutTest(lib.ContainerTest):

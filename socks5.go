@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,179 +43,136 @@ var socks5ReplyText = map[byte]string{
 	0x08: "address type not supported",
 }
 
-func socks5ReplyError(rep byte) error {
+func throwSocks5Reply(rep byte) {
 	if text, ok := socks5ReplyText[rep]; ok {
-		return errors.New("socks5: " + text)
+		ThrowFmt("socks5: %s", text)
 	}
 
-	return fmt.Errorf("socks5: reply code %d", rep)
+	ThrowFmt("socks5: reply code %d", rep)
 }
 
-// socks5AppendAddr appends ATYP, address and port. The host may be an IPv4 or
-// IPv6 literal or a name.
+func readFull(r io.Reader, b []byte) {
+	Throw2(io.ReadFull(r, b))
+}
+
+// socks5AppendAddr appends ATYP, address and port for an IP literal; the
+// stack never dials names.
 func socks5AppendAddr(b []byte, host string, port uint16) []byte {
 	ip := net.ParseIP(host)
 
-	switch {
-	case ip != nil && ip.To4() != nil:
+	if ip == nil {
+		ThrowFmt("socks5: %q is not an IP address", host)
+	}
+
+	if ip4 := ip.To4(); ip4 != nil {
 		b = append(b, socks5AddrIPv4)
-		b = append(b, ip.To4()...)
-	case ip != nil:
+		b = append(b, ip4...)
+	} else {
 		b = append(b, socks5AddrIPv6)
 		b = append(b, ip.To16()...)
-	default:
-		if len(host) > 255 {
-			host = host[:255]
-		}
-
-		b = append(b, socks5AddrDomain, byte(len(host)))
-		b = append(b, host...)
 	}
 
 	return binary.BigEndian.AppendUint16(b, port)
 }
 
 // socks5ReadAddr reads ATYP, address and port, and nothing beyond them.
-func socks5ReadAddr(r io.Reader) (string, uint16, error) {
+func socks5ReadAddr(r io.Reader) (string, uint16) {
 	var atyp [1]byte
-
-	if _, err := io.ReadFull(r, atyp[:]); err != nil {
-		return "", 0, err
-	}
+	readFull(r, atyp[:])
 
 	var host string
 
 	switch atyp[0] {
 	case socks5AddrIPv4:
 		var b [net.IPv4len]byte
-
-		if _, err := io.ReadFull(r, b[:]); err != nil {
-			return "", 0, err
-		}
-
+		readFull(r, b[:])
 		host = net.IP(b[:]).String()
 	case socks5AddrIPv6:
 		var b [net.IPv6len]byte
-
-		if _, err := io.ReadFull(r, b[:]); err != nil {
-			return "", 0, err
-		}
-
+		readFull(r, b[:])
 		host = net.IP(b[:]).String()
 	case socks5AddrDomain:
 		var n [1]byte
-
-		if _, err := io.ReadFull(r, n[:]); err != nil {
-			return "", 0, err
-		}
-
+		readFull(r, n[:])
 		b := make([]byte, n[0])
-
-		if _, err := io.ReadFull(r, b); err != nil {
-			return "", 0, err
-		}
-
+		readFull(r, b)
 		host = string(b)
 	default:
-		return "", 0, fmt.Errorf("socks5: bad address type %d", atyp[0])
+		ThrowFmt("socks5: bad address type %d", atyp[0])
 	}
 
 	var p [2]byte
+	readFull(r, p[:])
 
-	if _, err := io.ReadFull(r, p[:]); err != nil {
-		return "", 0, err
-	}
-
-	return host, binary.BigEndian.Uint16(p[:]), nil
+	return host, binary.BigEndian.Uint16(p[:])
 }
 
 // socks5Handshake negotiates the authentication method and authenticates.
-func socks5Handshake(conn net.Conn, auth *url.Userinfo) error {
+func socks5Handshake(conn net.Conn, auth *url.Userinfo) {
 	methods := []byte{socks5MethodNoAuth}
 
 	if auth != nil {
 		methods = append(methods, socks5MethodUserPass)
 	}
 
-	if _, err := conn.Write(append([]byte{socks5Version, byte(len(methods))}, methods...)); err != nil {
-		return err
-	}
+	Throw2(conn.Write(append([]byte{socks5Version, byte(len(methods))}, methods...)))
 
 	var resp [2]byte
-
-	if _, err := io.ReadFull(conn, resp[:]); err != nil {
-		return err
-	}
+	readFull(conn, resp[:])
 
 	if resp[0] != socks5Version {
-		return fmt.Errorf("socks5: bad version %d", resp[0])
+		ThrowFmt("socks5: bad version %d", resp[0])
 	}
 
 	switch resp[1] {
 	case socks5MethodNoAuth:
-		return nil
 	case socks5MethodUserPass:
 		if auth == nil {
-			return errors.New("socks5: proxy requires authentication")
+			ThrowFmt("socks5: proxy requires authentication")
 		}
 
-		return socks5Authenticate(conn, auth)
+		socks5Authenticate(conn, auth)
 	default:
-		return fmt.Errorf("socks5: no acceptable authentication method (%#x)", resp[1])
+		ThrowFmt("socks5: no acceptable authentication method (%#x)", resp[1])
 	}
 }
 
-func socks5Authenticate(conn net.Conn, auth *url.Userinfo) error {
+func socks5Authenticate(conn net.Conn, auth *url.Userinfo) {
 	user := auth.Username()
 	pass, _ := auth.Password()
 
 	if len(user) > 255 || len(pass) > 255 {
-		return errors.New("socks5: username or password longer than 255 bytes")
+		ThrowFmt("socks5: username or password longer than 255 bytes")
 	}
 
 	req := []byte{socks5AuthVersion, byte(len(user))}
 	req = append(req, user...)
 	req = append(req, byte(len(pass)))
 	req = append(req, pass...)
-
-	if _, err := conn.Write(req); err != nil {
-		return err
-	}
+	Throw2(conn.Write(req))
 
 	var resp [2]byte
-
-	if _, err := io.ReadFull(conn, resp[:]); err != nil {
-		return err
-	}
+	readFull(conn, resp[:])
 
 	if resp[1] != socks5Succeeded {
-		return errors.New("socks5: authentication failed")
+		ThrowFmt("socks5: authentication failed")
 	}
-
-	return nil
 }
 
 // socks5Request sends cmd for host:port and returns the bound address from
 // the reply.
-func socks5Request(conn net.Conn, cmd byte, host string, port uint16) (string, uint16, error) {
-	req := socks5AppendAddr([]byte{socks5Version, cmd, 0x00}, host, port)
-
-	if _, err := conn.Write(req); err != nil {
-		return "", 0, err
-	}
+func socks5Request(conn net.Conn, cmd byte, host string, port uint16) (string, uint16) {
+	Throw2(conn.Write(socks5AppendAddr([]byte{socks5Version, cmd, 0x00}, host, port)))
 
 	var head [3]byte
-
-	if _, err := io.ReadFull(conn, head[:]); err != nil {
-		return "", 0, err
-	}
+	readFull(conn, head[:])
 
 	if head[0] != socks5Version {
-		return "", 0, fmt.Errorf("socks5: bad version %d", head[0])
+		ThrowFmt("socks5: bad version %d", head[0])
 	}
 
 	if head[1] != socks5Succeeded {
-		return "", 0, socks5ReplyError(head[1])
+		throwSocks5Reply(head[1])
 	}
 
 	return socks5ReadAddr(conn)
@@ -233,23 +189,19 @@ func socks5UDPDatagram(host string, port uint16, payload []byte) []byte {
 
 // socks5ParseUDPDatagram splits a relayed datagram into its source address
 // and payload.
-func socks5ParseUDPDatagram(b []byte) (string, uint16, []byte, error) {
+func socks5ParseUDPDatagram(b []byte) (string, uint16, []byte) {
 	if len(b) < 4 {
-		return "", 0, nil, errors.New("socks5: short udp datagram")
+		ThrowFmt("socks5: short udp datagram")
 	}
 
 	if b[2] != 0 {
-		return "", 0, nil, errors.New("socks5: udp fragmentation is not supported")
+		ThrowFmt("socks5: udp fragmentation is not supported")
 	}
 
 	r := bytes.NewReader(b[3:])
-	host, port, err := socks5ReadAddr(r)
+	host, port := socks5ReadAddr(r)
 
-	if err != nil {
-		return "", 0, nil, err
-	}
-
-	return host, port, b[len(b)-r.Len():], nil
+	return host, port, b[len(b)-r.Len():]
 }
 
 func NewSOCKS5Connector(connector Connector, proxy *ProxyAddr) Connector {
@@ -264,48 +216,34 @@ type socks5Connector struct {
 // DialContext opens a CONNECT stream through the proxy. The returned
 // connection is the transport connection itself, so half-closes reach the
 // proxy natively.
-func (c *socks5Connector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	if network != "tcp" {
-		return nil, fmt.Errorf("socks5: network %s is not supported", network)
-	}
-
-	host, port, err := splitHostPort(address)
+func (c *socks5Connector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
+	err = Try(func() {
+		conn = c.connect(ctx, network, address)
+	}).AsError()
 
 	if err != nil {
-		return nil, err
+		err = fmt.Errorf("%s via %s: %w", address, c.proxy.Address, err)
 	}
 
-	conn, err := c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if err := socks5Connect(ctx, conn, c.proxy.Auth, host, port); err != nil {
-		conn.Close()
-
-		return nil, fmt.Errorf("%s via %s: %w", address, c.proxy.Address, err)
-	}
-
-	return conn, nil
+	return
 }
 
-// socks5Connect runs the handshake and CONNECT on an open proxy connection,
-// bounded by the context deadline.
-func socks5Connect(ctx context.Context, conn net.Conn, auth *url.Userinfo, host string, port uint16) error {
-	if err := applyDeadline(ctx, conn); err != nil {
-		return err
+func (c *socks5Connector) connect(ctx context.Context, network, address string) net.Conn {
+	if network != "tcp" {
+		ThrowFmt("socks5: network %s is not supported", network)
 	}
 
-	if err := socks5Handshake(conn, auth); err != nil {
-		return err
-	}
+	host, port := hostPort(address)
 
-	if _, _, err := socks5Request(conn, socks5CmdConnect, host, port); err != nil {
-		return err
-	}
+	conn := Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address))
+	defer CloseOnThrow(conn)
 
-	return conn.SetDeadline(time.Time{})
+	applyDeadline(ctx, conn)
+	socks5Handshake(conn, c.proxy.Auth)
+	socks5Request(conn, socks5CmdConnect, host, port)
+	Throw(conn.SetDeadline(time.Time{}))
+
+	return conn
 }
 
 func NewSOCKS5UDPConnector(log *slog.Logger, tcpConnector Connector, udpConnector Connector, proxy *ProxyAddr) Connector {
@@ -334,45 +272,42 @@ type socks5UDPConnector struct {
 type associationSlot struct {
 	ready chan struct{}
 	assoc *udpAssociation
-	err   error
+	exc   *Exception
 }
 
 // DialContext returns a connection to one UDP destination through the proxy.
 // The context names the source endpoint of the flow; flows from one source
 // share a single UDP association, as a NAT shares one external port.
-func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
+	err = Try(func() {
+		conn = c.dial(ctx, network, address)
+	}).AsError()
+
+	return
+}
+
+func (c *socks5UDPConnector) dial(ctx context.Context, network, address string) net.Conn {
 	if network != "udp" {
-		return nil, fmt.Errorf("socks5: network %s is not supported", network)
+		ThrowFmt("socks5: network %s is not supported", network)
 	}
 
-	host, port, err := splitHostPort(address)
-
-	if err != nil {
-		return nil, err
-	}
-
+	host, port := hostPort(address)
 	src, ok := udpSourceFromContext(ctx)
 
 	if !ok {
-		return nil, errors.New("socks5: udp dial without a source endpoint")
+		ThrowFmt("socks5: udp dial without a source endpoint")
 	}
 
 	for {
-		a, err := c.association(ctx, src)
-
-		if err != nil {
-			return nil, err
-		}
-
-		if flow, ok := a.open(host, port); ok {
-			return flow, nil
+		if flow, ok := c.association(ctx, src).open(host, port); ok {
+			return flow
 		}
 
 		// the association closed between the lookup and open, start over
 	}
 }
 
-func (c *socks5UDPConnector) association(ctx context.Context, src string) (*udpAssociation, error) {
+func (c *socks5UDPConnector) association(ctx context.Context, src string) *udpAssociation {
 	c.mu.Lock()
 	slot := c.slots[src]
 
@@ -382,33 +317,38 @@ func (c *socks5UDPConnector) association(ctx context.Context, src string) (*udpA
 		select {
 		case <-slot.ready:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			Throw(ctx.Err())
 		}
 
-		return slot.assoc, slot.err
+		if slot.exc != nil {
+			slot.exc.throw()
+		}
+
+		return slot.assoc
 	}
 
 	slot = &associationSlot{ready: make(chan struct{})}
 	c.slots[src] = slot
 	c.mu.Unlock()
 
-	control, relay, err := c.associate(ctx)
-
-	if err != nil {
+	Try(func() {
+		control, relay := c.associate(ctx)
+		slot.assoc = newUDPAssociation(c.log, control, relay, src, c.forget)
+	}).Catch(func(exc *Exception) {
 		c.mu.Lock()
 		delete(c.slots, src)
 		c.mu.Unlock()
 
-		slot.err = err
-		close(slot.ready)
+		slot.exc = exc
+	})
 
-		return nil, err
-	}
-
-	slot.assoc = newUDPAssociation(c.log, control, relay, src, c.forget)
 	close(slot.ready)
 
-	return slot.assoc, nil
+	if slot.exc != nil {
+		slot.exc.throw()
+	}
+
+	return slot.assoc
 }
 
 func (c *socks5UDPConnector) forget(a *udpAssociation) {
@@ -423,52 +363,27 @@ func (c *socks5UDPConnector) forget(a *udpAssociation) {
 // associate opens a UDP association: a TCP control connection, whose
 // lifetime bounds the association (RFC 1928 section 7), and a UDP socket to
 // the relay the proxy names.
-func (c *socks5UDPConnector) associate(ctx context.Context) (control, relay net.Conn, err error) {
-	control, err = c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address)
+func (c *socks5UDPConnector) associate(ctx context.Context) (control, relay net.Conn) {
+	control = Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address))
+	defer CloseOnThrow(control)
 
-	if err != nil {
-		return nil, nil, err
-	}
+	applyDeadline(ctx, control)
+	socks5Handshake(control, c.proxy.Auth)
 
-	defer func() {
-		if err != nil {
-			control.Close()
-		}
-	}()
-
-	if err = applyDeadline(ctx, control); err != nil {
-		return nil, nil, err
-	}
-
-	if err = socks5Handshake(control, c.proxy.Auth); err != nil {
-		return nil, nil, err
-	}
-
-	bindHost, bindPort, err := socks5Request(control, socks5CmdUDPAssociate, "0.0.0.0", 0)
-
-	if err != nil {
-		return nil, nil, err
-	}
+	bindHost, bindPort := socks5Request(control, socks5CmdUDPAssociate, "0.0.0.0", 0)
 
 	// An unspecified bind address means "the host you reached me on".
 	if ip := net.ParseIP(bindHost); ip != nil && ip.IsUnspecified() {
-		bindHost, _, _ = net.SplitHostPort(c.proxy.Address)
+		bindHost, _ = Throw3(net.SplitHostPort(c.proxy.Address))
 	}
 
 	relayAddr := net.JoinHostPort(bindHost, strconv.Itoa(int(bindPort)))
 	c.log.Debug("socks5: udp associate", "proxy", c.proxy.Address, "relay", relayAddr)
 
-	relay, err = c.udpConnector.DialContext(ctx, "udp", relayAddr)
+	relay = Throw2(c.udpConnector.DialContext(ctx, "udp", relayAddr))
+	defer CloseOnThrow(relay)
 
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err = control.SetDeadline(time.Time{}); err != nil {
-		relay.Close()
-
-		return nil, nil, err
-	}
+	Throw(control.SetDeadline(time.Time{}))
 
 	// A UDP association terminates when the TCP connection that the UDP
 	// ASSOCIATE request arrived on terminates.
@@ -478,5 +393,5 @@ func (c *socks5UDPConnector) associate(ctx context.Context) (control, relay net.
 		relay.Close()
 	}()
 
-	return control, relay, nil
+	return control, relay
 }

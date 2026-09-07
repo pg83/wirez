@@ -21,8 +21,6 @@ const (
 	dnsBufferSize = 4096
 	// dnsStreamIdleTimeout closes a TCP client that sends nothing for this long.
 	dnsStreamIdleTimeout = 10 * time.Second
-	// dnsMaxMessageSize is the largest message the TCP length prefix can carry.
-	dnsMaxMessageSize = 65535
 )
 
 // parseUpstreamDNS normalizes a -D value (bare IPv4/IPv6 or host:port) to a
@@ -66,7 +64,7 @@ func newDNSUpstreams(addrs []string) *dnsUpstreams {
 	return &dnsUpstreams{addrs: addrs}
 }
 
-func (u *dnsUpstreams) forward(query []byte) ([]byte, error) {
+func (u *dnsUpstreams) forward(query []byte) []byte {
 	start := int(u.preferred.Load())
 
 	var errs []error
@@ -76,22 +74,24 @@ func (u *dnsUpstreams) forward(query []byte) ([]byte, error) {
 
 		var resp []byte
 
-		err := Try(func() {
+		exc := Try(func() {
 			resp = forwardDNS(query, u.addrs[idx])
-		}).AsError()
+		})
 
-		if err == nil {
+		if exc == nil {
 			if idx != start {
 				u.preferred.Store(int32(idx))
 			}
 
-			return resp, nil
+			return resp
 		}
 
-		errs = append(errs, fmt.Errorf("%s: %w", u.addrs[idx], err))
+		errs = append(errs, fmt.Errorf("%s: %w", u.addrs[idx], exc))
 	}
 
-	return nil, errors.Join(errs...)
+	Throw(errors.Join(errs...))
+
+	return nil
 }
 
 // dnsPolicy decides which AAAA answers the container is allowed to see.
@@ -106,10 +106,6 @@ type dnsPolicy struct {
 }
 
 func (p *dnsPolicy) allowsAAAA(resp []byte) bool {
-	if !p.ipv6 {
-		return false
-	}
-
 	var parser dnsmessage.Parser
 
 	if _, err := parser.Start(resp); err != nil {
@@ -236,46 +232,35 @@ func handleDNSStream(log *slog.Logger, conn net.Conn, upstreams *dnsUpstreams, p
 	for {
 		Throw(conn.SetDeadline(time.Now().Add(dnsStreamIdleTimeout)))
 
-		query, err := readDNSMessage(conn)
+		var query []byte
 
-		if err != nil {
+		// EOF or the idle deadline: the client is done
+		if Try(func() { query = readDNSMessage(conn) }) != nil {
 			return
 		}
 
-		Throw(writeDNSMessage(conn, resolveDNS(log, query, upstreams, policy)))
+		writeDNSMessage(conn, resolveDNS(log, query, upstreams, policy))
 	}
 }
 
 // readDNSMessage reads one length-prefixed DNS message.
-func readDNSMessage(r io.Reader) ([]byte, error) {
+func readDNSMessage(r io.Reader) []byte {
 	var length [2]byte
-
-	if _, err := io.ReadFull(r, length[:]); err != nil {
-		return nil, err
-	}
+	readFull(r, length[:])
 
 	msg := make([]byte, binary.BigEndian.Uint16(length[:]))
+	readFull(r, msg)
 
-	if _, err := io.ReadFull(r, msg); err != nil {
-		return nil, err
-	}
-
-	return msg, nil
+	return msg
 }
 
-// writeDNSMessage writes one length-prefixed DNS message.
-func writeDNSMessage(w io.Writer, msg []byte) error {
-	if len(msg) > dnsMaxMessageSize {
-		return fmt.Errorf("dns: message of %d bytes does not fit a TCP frame", len(msg))
-	}
-
+// writeDNSMessage writes one length-prefixed DNS message; a DNS message
+// never exceeds what the 16-bit length can carry.
+func writeDNSMessage(w io.Writer, msg []byte) {
 	buf := make([]byte, 2+len(msg))
 	binary.BigEndian.PutUint16(buf, uint16(len(msg)))
 	copy(buf[2:], msg)
-
-	_, err := w.Write(buf)
-
-	return err
+	Throw2(w.Write(buf))
 }
 
 // resolveDNS forwards queries verbatim to the upstream resolvers, except that
@@ -289,17 +274,17 @@ func resolveDNS(log *slog.Logger, query []byte, upstreams *dnsUpstreams, policy 
 	if err != nil {
 		log.Debug("dns: unparsable query, forwarding as-is", "err", err)
 
-		return Throw2(upstreams.forward(query))
+		return upstreams.forward(query)
 	}
 
 	question, err := parser.Question()
 
 	if err != nil {
-		return Throw2(upstreams.forward(query))
+		return upstreams.forward(query)
 	}
 
 	if question.Type != dnsmessage.TypeAAAA {
-		return Throw2(upstreams.forward(query))
+		return upstreams.forward(query)
 	}
 
 	if !policy.ipv6 {
@@ -308,7 +293,7 @@ func resolveDNS(log *slog.Logger, query []byte, upstreams *dnsUpstreams, policy 
 		return emptyResponse(header, question)
 	}
 
-	resp := Throw2(upstreams.forward(query))
+	resp := upstreams.forward(query)
 
 	if policy.allowsAAAA(resp) {
 		return resp
@@ -378,7 +363,7 @@ func forwardDNSTCP(query []byte, upstream string) []byte {
 	defer conn.Close()
 
 	Throw(conn.SetDeadline(time.Now().Add(dnsUpstreamTimeout)))
-	Throw(writeDNSMessage(conn, query))
+	writeDNSMessage(conn, query)
 
-	return Throw2(readDNSMessage(conn))
+	return readDNSMessage(conn)
 }

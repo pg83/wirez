@@ -53,29 +53,18 @@ func closeWrite(conn net.Conn) error {
 }
 
 // applyDeadline bounds a proxy handshake on conn by the context deadline.
-func applyDeadline(ctx context.Context, conn net.Conn) error {
+func applyDeadline(ctx context.Context, conn net.Conn) {
 	if deadline, ok := ctx.Deadline(); ok {
-		return conn.SetDeadline(deadline)
+		Throw(conn.SetDeadline(deadline))
 	}
-
-	return nil
 }
 
-// splitHostPort parses host:port into a host and a numeric port.
-func splitHostPort(address string) (string, uint16, error) {
-	host, portStr, err := net.SplitHostPort(address)
+// hostPort splits host:port into a host and a numeric port.
+func hostPort(address string) (string, uint16) {
+	host, portStr := Throw3(net.SplitHostPort(address))
+	port := Throw2(strconv.ParseUint(portStr, 10, 16))
 
-	if err != nil {
-		return "", 0, err
-	}
-
-	port, err := strconv.ParseUint(portStr, 10, 16)
-
-	if err != nil {
-		return "", 0, fmt.Errorf("invalid port in %s: %w", address, err)
-	}
-
-	return host, uint16(port), nil
+	return host, uint16(port)
 }
 
 // udpSourceKey carries the source endpoint of a UDP flow in the dial context,
@@ -246,10 +235,6 @@ func (m *addressMapper) AddAddressMapping(network, fromAddress, toAddress string
 
 	if _, ok := m.nat[network]; !ok {
 		m.nat[network] = make(map[string]string)
-	}
-
-	if !strings.Contains(fromAddress, ":") {
-		fromAddress = ":" + fromAddress
 	}
 
 	host, port := Throw3(net.SplitHostPort(fromAddress))

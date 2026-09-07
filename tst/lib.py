@@ -282,8 +282,21 @@ class Socks5Server(TcpServer):
     bind address, as some real proxies do, and relays datagrams to their
     destination (or to udp_backend) with the requested address in replies."""
 
+    # ways a proxy can go wrong, one per test
+    MISBEHAVIOURS = (
+        "bad_version",            # answers the method selection with SOCKS4
+        "no_method",              # accepts none of the offered methods
+        "close_after_methods",    # hangs up after the method selection
+        "reply_bad_version",      # the CONNECT reply carries a wrong version
+        "reply_unknown_code",     # the CONNECT reply code is not in the RFC
+        "reply_bad_atyp",         # the CONNECT reply carries an unknown address type
+        "bind_domain",            # names the UDP relay by a domain name
+        "udp_garbage",            # sends junk datagrams before each real reply
+        "udp_unsolicited",        # sends a datagram from a source nobody talked to
+    )
+
     def __init__(self, backend=None, udp_backend=None, user=None, password=None, banner=b"",
-                 reply_v4_mapped=False):
+                 reply_v4_mapped=False, misbehave=None):
         self.backend = backend
         self.udp_backend = udp_backend
         self.user = user
@@ -291,6 +304,8 @@ class Socks5Server(TcpServer):
         self.banner = banner
         # some proxies spell IPv4 sources of relayed datagrams as ::ffff:a.b.c.d
         self.reply_v4_mapped = reply_v4_mapped
+        assert misbehave in (None, *self.MISBEHAVIOURS), misbehave
+        self.misbehave = misbehave
         self.lock = threading.Lock()
         self.connects = []
         self.associations = 0
@@ -313,6 +328,12 @@ class Socks5Server(TcpServer):
         if version != 5:
             return
         read(count)
+        if self.misbehave == "bad_version":
+            conn.sendall(b"\x04\x00")
+            return
+        if self.misbehave == "no_method":
+            conn.sendall(b"\x05\xff")
+            return
         if self.user is None:
             conn.sendall(b"\x05\x00")
         else:
@@ -324,8 +345,19 @@ class Socks5Server(TcpServer):
                 conn.sendall(b"\x01\x01")
                 return
             conn.sendall(b"\x01\x00")
+        if self.misbehave == "close_after_methods":
+            return
         _, cmd, _ = read(3)
         host, port = socks_read_addr(read)
+        if self.misbehave == "reply_bad_version":
+            conn.sendall(b"\x04\x00\x00" + socks_addr_bytes("0.0.0.0", 0))
+            return
+        if self.misbehave == "reply_unknown_code":
+            conn.sendall(b"\x05\x42\x00" + socks_addr_bytes("0.0.0.0", 0))
+            return
+        if self.misbehave == "reply_bad_atyp":
+            conn.sendall(b"\x05\x00\x00\x09\x00\x00")
+            return
         if cmd == 1:
             self.connect(conn, host, port)
         elif cmd == 3:
@@ -393,11 +425,22 @@ class Socks5Server(TcpServer):
                     host, port = sender
                 if self.reply_v4_mapped and ":" not in host:
                     host = "::ffff:" + host
+                if self.misbehave == "udp_garbage":
+                    relay_sock.sendto(b"\x00", client)                       # too short
+                    relay_sock.sendto(b"\x00\x00\x01" + socks_addr_bytes(host, port) + data, client)  # fragmented
+                if self.misbehave == "udp_unsolicited":
+                    relay_sock.sendto(socks_udp_datagram("203.0.113.9", 9, b"nobody asked"), client)
                 relay_sock.sendto(socks_udp_datagram(host, port, data), client)
 
         for target in (inbound, outbound):
             threading.Thread(target=target, daemon=True).start()
-        control.sendall(b"\x05\x00\x00" + socks_addr_bytes("0.0.0.0", relay_sock.getsockname()[1]))
+        relay_port = relay_sock.getsockname()[1]
+        if self.misbehave == "bind_domain":
+            # a domain-typed field holding an IP literal, as some proxies send
+            bind = b"\x03" + bytes([len("127.0.0.1")]) + b"127.0.0.1" + struct.pack("!H", relay_port)
+        else:
+            bind = socks_addr_bytes("0.0.0.0", relay_port)
+        control.sendall(b"\x05\x00\x00" + bind)
         control.settimeout(None)
         try:
             while control.recv(65536):
@@ -414,12 +457,19 @@ class HttpConnectProxy(TcpServer):
     """An HTTP CONNECT proxy for tests, with optional Basic auth and the same
     banner trick as the SOCKS5 one."""
 
-    def __init__(self, backend=None, user=None, password=None, banner=b""):
+    MISBEHAVIOURS = (
+        "malformed_status",   # answers with something that is not an HTTP status line
+        "close",              # hangs up without answering
+    )
+
+    def __init__(self, backend=None, user=None, password=None, banner=b"", misbehave=None):
         self.backend = backend
         self.auth = None
         if user is not None:
             self.auth = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
         self.banner = banner
+        assert misbehave in (None, *self.MISBEHAVIOURS), misbehave
+        self.misbehave = misbehave
         self.lock = threading.Lock()
         self.connects = []
         super().__init__()
@@ -427,6 +477,11 @@ class HttpConnectProxy(TcpServer):
     def handle(self, conn):
         reader = conn.makefile("rb")
         request = reader.readline().decode().strip()
+        if self.misbehave == "close":
+            return
+        if self.misbehave == "malformed_status":
+            conn.sendall(b"not http at all\r\n\r\n")
+            return
         headers = {}
         while True:
             line = reader.readline().decode().strip()
@@ -463,9 +518,11 @@ class DnsServer:
     address lists; UDP answers carry the TC bit and no records when
     truncate_udp is set. Every query is recorded as (name, qtype, transport)."""
 
-    def __init__(self, records, truncate_udp=False, host="127.0.0.1"):
+    def __init__(self, records, truncate_udp=False, host="127.0.0.1", garbage=None):
         self.records = records
         self.truncate_udp = truncate_udp
+        # when set, every answer is these bytes instead of a DNS message
+        self.garbage = garbage
         self.lock = threading.Lock()
         self.queries = []
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -483,6 +540,8 @@ class DnsServer:
         _, _, name, qtype = dnswire.parse_question(query)
         with self.lock:
             self.queries.append((name, qtype, transport))
+        if self.garbage is not None:
+            return self.garbage
         ips = [ip for ip in self.records.get(name, [])
                if (":" in ip) == (qtype == dnswire.TYPE_AAAA)]
         if transport == "udp" and self.truncate_udp:

@@ -33,10 +33,11 @@ class HttpConnectTest(lib.ContainerTest):
         self.assertEqual(out, "refused")
 
     def test_udp_is_refused_through_an_http_hop(self):
-        echo = lib.UdpEchoServer()
         proxy = lib.HttpConnectProxy()
-        out = lib.in_container(["-F", f"http://{proxy.addr}"], "udp", echo.addr)
-        self.assertEqual(out, "timeout")
+        # a destination the container has to route through wirez
+        result = lib.in_container(["-F", f"http://{proxy.addr}", "-v"], "udp", "192.0.2.1:5353", check=False)
+        self.assertEqual(result.stdout, "timeout")
+        self.assertIn("udp is not supported through an HTTP proxy", result.stderr)
         self.assertEqual(proxy.connects, [])
 
 

@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
 type Exception struct {
 	what func() error
@@ -80,4 +83,13 @@ func Try(cb func()) (err *Exception) {
 	cb()
 
 	return nil
+}
+
+// CloseOnThrow, deferred, closes c when the function unwinds with a throw and
+// lets the throw continue; on a normal return it does nothing.
+func CloseOnThrow(c io.Closer) {
+	if r := recover(); r != nil {
+		c.Close()
+		panic(r)
+	}
 }

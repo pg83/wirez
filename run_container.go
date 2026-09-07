@@ -103,6 +103,8 @@ func runContainer(args []string) {
 	Throw(proc.Run())
 }
 
+// childUnixSocketConn is the container's end of the control socket; as on
+// the parent's side, the *os.File owns the descriptor.
 type childUnixSocketConn struct {
 	socketFd   int
 	socketFile *os.File
@@ -116,7 +118,7 @@ func newChildUnixSocketConn(socketFd int) *childUnixSocketConn {
 }
 
 func (c *childUnixSocketConn) Close() error {
-	return unix.Close(c.socketFd)
+	return c.socketFile.Close()
 }
 
 func (c *childUnixSocketConn) SendFds(fds ...int) {

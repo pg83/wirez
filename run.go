@@ -98,7 +98,8 @@ func runRun(log *slog.Logger, args []string) {
 	useDNS := len(dnsUpstreams) > 0
 
 	parentFd, childFd := newUnixSocketPair()
-	defer unix.Close(parentFd)
+	parentConn := newParentUnixSocketConn(parentFd)
+	defer parentConn.Close()
 	defer func() {
 		if childFd >= 0 {
 			_ = unix.Close(childFd)
@@ -140,8 +141,6 @@ func runRun(log *slog.Logger, args []string) {
 	Throw(proc.Start())
 	Throw(unix.Close(childFd))
 	childFd = -1
-
-	parentConn := newParentUnixSocketConn(parentFd)
 
 	fds := parentConn.ReceiveFds()
 
@@ -253,6 +252,10 @@ func newUnixSocketPair() (parentFd, childFd int) {
 	return
 }
 
+// parentUnixSocketConn is the parent's end of the control socket. The
+// *os.File owns the descriptor: a raw unix.Close next to it would close the
+// number twice, the second time from the File's finalizer, when the number
+// may already belong to something else.
 type parentUnixSocketConn struct {
 	socketFd   int
 	socketFile *os.File
@@ -266,7 +269,7 @@ func newParentUnixSocketConn(socketFd int) *parentUnixSocketConn {
 }
 
 func (c *parentUnixSocketConn) Close() error {
-	return unix.Close(c.socketFd)
+	return c.socketFile.Close()
 }
 
 func (c *parentUnixSocketConn) ReceiveFds() []int {

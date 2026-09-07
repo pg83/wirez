@@ -90,10 +90,16 @@ func (a *udpAssociation) readLoop() {
 			return
 		}
 
-		host, port, payload, err := socks5ParseUDPDatagram(buf[:n])
+		var host string
+		var port uint16
+		var payload []byte
 
-		if err != nil {
-			a.log.Debug("socks5: bad udp datagram from relay", "err", err)
+		exc := Try(func() {
+			host, port, payload = socks5ParseUDPDatagram(buf[:n])
+		})
+
+		if exc != nil {
+			a.log.Debug("socks5: bad udp datagram from relay", "err", exc)
 
 			continue
 		}
@@ -204,18 +210,19 @@ func (f *udpFlow) Read(b []byte) (int, error) {
 	}
 }
 
-func (f *udpFlow) Write(b []byte) (int, error) {
-	select {
-	case <-f.done:
-		return 0, net.ErrClosed
-	default:
-	}
+func (f *udpFlow) Write(b []byte) (n int, err error) {
+	err = Try(func() {
+		select {
+		case <-f.done:
+			Throw(net.ErrClosed)
+		default:
+		}
 
-	if _, err := f.a.relay.Write(socks5UDPDatagram(f.host, f.port, b)); err != nil {
-		return 0, err
-	}
+		Throw2(f.a.relay.Write(socks5UDPDatagram(f.host, f.port, b)))
+		n = len(b)
+	}).AsError()
 
-	return len(b), nil
+	return
 }
 
 func (f *udpFlow) Close() error {

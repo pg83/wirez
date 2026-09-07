@@ -56,6 +56,15 @@ class DnsTest(lib.ContainerTest):
         self.assertEqual(lib.in_container(flags, "dns", "nat64.test", "AAAA"), "64:ff9b::c000:201")
         self.assertTrue(lib.in_container(flags, "dns", "far.test", "AAAA").startswith("error:"))
 
+    def test_garbage_aaaa_answers_become_nodata(self):
+        # a reply that is no DNS message at all, and one whose question
+        # section is cut off: neither is let through
+        for garbage in (b"\x01", b"\x42\x42\x81\x80\x00\x01\x00\x00\x00\x00\x00\x00"):
+            with self.subTest(garbage=garbage):
+                dns = lib.DnsServer(RECORDS, garbage=garbage)
+                out = lib.in_container(self.flags("-6", "-B", "2001:db8::/32", dns=dns), "dns", "wirez.test", "AAAA")
+                self.assertTrue(out.startswith("error:"), out)
+
     def test_bare_upstream_addresses_imply_port_53(self):
         # nothing is resolved here, the log shows how -D was understood
         result = lib.in_container(

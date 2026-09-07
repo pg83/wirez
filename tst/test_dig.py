@@ -25,6 +25,12 @@ class DigTest(lib.WorkloadTest):
     def test_a_over_tcp(self):
         self.assertEqual(self.dig("+tcp", "wirez.test", "A", "+short"), "192.0.2.1\n")
 
+    def test_dead_upstreams_are_an_error(self):
+        flags = ["-F", self.proxy.addr, "-D", lib.closed_udp_port(), "-D", lib.closed_udp_port(), "-v"]
+        result = lib.in_container_run(flags, ["dig", "@127.0.0.1", "+time=2", "+tries=1", "wirez.test", "A", "+short"], check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("connection refused", result.stderr)
+
     def test_aaaa_is_nodata(self):
         out = self.dig("wirez.test", "AAAA", "+noall", "+comments", "+answer")
         self.assertIn("status: NOERROR", out)

@@ -24,35 +24,34 @@ type httpConnector struct {
 	proxy        *ProxyAddr
 }
 
-func (c *httpConnector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (c *httpConnector) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
+	err = Try(func() {
+		conn = c.connect(ctx, network, address)
+	}).AsError()
+
+	if err != nil {
+		err = fmt.Errorf("%s via %s: %w", address, c.proxy.Address, err)
+	}
+
+	return
+}
+
+func (c *httpConnector) connect(ctx context.Context, network, address string) net.Conn {
 	if network != "tcp" {
-		return nil, fmt.Errorf("http proxy: network %s is not supported", network)
+		ThrowFmt("http proxy: network %s is not supported", network)
 	}
 
-	conn, err := c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address)
+	conn := Throw2(c.tcpConnector.DialContext(ctx, "tcp", c.proxy.Address))
+	defer CloseOnThrow(conn)
 
-	if err != nil {
-		return nil, err
-	}
-
-	tunnel, err := httpConnect(ctx, conn, c.proxy.Auth, address)
-
-	if err != nil {
-		conn.Close()
-
-		return nil, fmt.Errorf("%s via %s: %w", address, c.proxy.Address, err)
-	}
-
-	return tunnel, nil
+	return httpConnect(ctx, conn, c.proxy.Auth, address)
 }
 
 // httpConnect asks the proxy for a tunnel to address. Bytes the proxy has
 // already forwarded after the response headers stay readable through the
 // returned connection.
-func httpConnect(ctx context.Context, conn net.Conn, auth *url.Userinfo, address string) (net.Conn, error) {
-	if err := applyDeadline(ctx, conn); err != nil {
-		return nil, err
-	}
+func httpConnect(ctx context.Context, conn net.Conn, auth *url.Userinfo, address string) net.Conn {
+	applyDeadline(ctx, conn)
 
 	var req strings.Builder
 
@@ -65,38 +64,26 @@ func httpConnect(ctx context.Context, conn net.Conn, auth *url.Userinfo, address
 	}
 
 	req.WriteString("\r\n")
-
-	if _, err := conn.Write([]byte(req.String())); err != nil {
-		return nil, err
-	}
+	Throw2(conn.Write([]byte(req.String())))
 
 	br := bufio.NewReader(conn)
 	tp := textproto.NewReader(br)
-	status, err := tp.ReadLine()
-
-	if err != nil {
-		return nil, err
-	}
-
+	status := Throw2(tp.ReadLine())
 	parts := strings.SplitN(status, " ", 3)
 
 	if len(parts) < 2 || !strings.HasPrefix(parts[0], "HTTP/") {
-		return nil, fmt.Errorf("http proxy: malformed response %q", status)
+		ThrowFmt("http proxy: malformed response %q", status)
 	}
 
-	if _, err := tp.ReadMIMEHeader(); err != nil {
-		return nil, err
-	}
+	Throw2(tp.ReadMIMEHeader())
 
 	if parts[1] != "200" {
-		return nil, fmt.Errorf("http proxy: %s", strings.TrimPrefix(status, parts[0]+" "))
+		ThrowFmt("http proxy: %s", strings.TrimPrefix(status, parts[0]+" "))
 	}
 
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return nil, err
-	}
+	Throw(conn.SetDeadline(time.Time{}))
 
-	return &httpTunnel{Conn: conn, r: br}, nil
+	return &httpTunnel{Conn: conn, r: br}
 }
 
 // httpTunnel is an established CONNECT tunnel; reads drain what the response
