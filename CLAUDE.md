@@ -50,3 +50,5 @@ Use the monorepo `build` runner, never `go build`/`go test` directly:
 ```
 
 Go dependencies are not vendored; `go.mod`/`go.sum` pin them and the module cache supplies them. CI (`.github/workflows/ci.yml`) calls `./build` too.
+
+Integration tests are Python scripts `tst/test_*.py` (unittest, helpers in `tst/lib.py`, the in-container client in `tst/client.py`); `build.py` turns each into a node depending on the binary. Every CLI feature gets one there. Go `_test.go` files are unit tests only.

@@ -314,7 +314,7 @@ func NewSOCKS5UDPConnector(log *slog.Logger, tcpConnector Connector, udpConnecto
 		tcpConnector: tcpConnector,
 		udpConnector: udpConnector,
 		proxy:        proxy,
-		assocs:       make(map[string]*udpAssociation),
+		slots:        make(map[string]*associationSlot),
 	}
 }
 
@@ -324,8 +324,17 @@ type socks5UDPConnector struct {
 	udpConnector Connector
 	proxy        *ProxyAddr
 
-	mu     sync.Mutex
-	assocs map[string]*udpAssociation // shared associations by source endpoint
+	mu    sync.Mutex
+	slots map[string]*associationSlot // shared associations by source endpoint
+}
+
+// associationSlot is one source endpoint's association, or the promise of
+// it: flows that arrive while it is being set up wait for it instead of each
+// opening their own.
+type associationSlot struct {
+	ready chan struct{}
+	assoc *udpAssociation
+	err   error
 }
 
 // DialContext returns a connection to one UDP destination through the proxy.
@@ -373,42 +382,49 @@ func (c *socks5UDPConnector) dialShared(ctx context.Context, src, host string, p
 
 func (c *socks5UDPConnector) association(ctx context.Context, src string) (*udpAssociation, error) {
 	c.mu.Lock()
-	a := c.assocs[src]
-	c.mu.Unlock()
+	slot := c.slots[src]
 
-	if a != nil {
-		return a, nil
+	if slot != nil {
+		c.mu.Unlock()
+
+		select {
+		case <-slot.ready:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		return slot.assoc, slot.err
 	}
+
+	slot = &associationSlot{ready: make(chan struct{})}
+	c.slots[src] = slot
+	c.mu.Unlock()
 
 	control, relay, err := c.associate(ctx)
 
 	if err != nil {
+		c.mu.Lock()
+		delete(c.slots, src)
+		c.mu.Unlock()
+
+		slot.err = err
+		close(slot.ready)
+
 		return nil, err
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	slot.assoc = newUDPAssociation(c.log, control, relay, src, c.forget)
+	close(slot.ready)
 
-	if a := c.assocs[src]; a != nil {
-		// lost the race with a concurrent flow of the same source
-		control.Close()
-		relay.Close()
-
-		return a, nil
-	}
-
-	a = newUDPAssociation(c.log, control, relay, src, c.forget)
-	c.assocs[src] = a
-
-	return a, nil
+	return slot.assoc, nil
 }
 
 func (c *socks5UDPConnector) forget(a *udpAssociation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.assocs[a.src] == a {
-		delete(c.assocs, a.src)
+	if slot := c.slots[a.src]; slot != nil && slot.assoc == a {
+		delete(c.slots, a.src)
 	}
 }
 

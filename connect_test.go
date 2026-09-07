@@ -255,6 +255,54 @@ func TestSOCKS5UDPSharedAssociation(t *testing.T) {
 	}
 }
 
+// Flows that start at the same moment still share one association.
+func TestSOCKS5UDPConcurrentFlowsShareAssociation(t *testing.T) {
+	proxy := newSocks5TestServer(t, socks5TestConfig{})
+	direct := NewDirectConnector()
+	connector := NewSOCKS5UDPConnector(discardLogger(), direct, direct, parseProxyURL(proxy.Addr()))
+	ctx := withUDPSource(dialContext(t), "10.1.1.5:40000")
+
+	const flows = 8
+
+	conns := make(chan net.Conn, flows)
+	errs := make(chan error, flows)
+
+	for i := 0; i < flows; i++ {
+		// one destination per flow, as the stack never opens two flows for
+		// the same source and destination
+		echo := udpEchoServer(t)
+
+		go func() {
+			conn, err := connector.DialContext(ctx, "udp", echo)
+
+			if err != nil {
+				errs <- err
+
+				return
+			}
+
+			conns <- conn
+		}()
+	}
+
+	for i := 0; i < flows; i++ {
+		select {
+		case conn := <-conns:
+			defer conn.Close()
+
+			if got := exchange(t, conn, "hi"); got != "hi" {
+				t.Errorf("flow got %q", got)
+			}
+		case err := <-errs:
+			t.Fatal(err)
+		}
+	}
+
+	if n := proxy.Associations(); n != 1 {
+		t.Errorf("associations = %d, want 1 for concurrent flows of one source", n)
+	}
+}
+
 // Without a source in the context every flow gets its own association.
 func TestSOCKS5UDPDedicatedAssociation(t *testing.T) {
 	echo := udpEchoServer(t)

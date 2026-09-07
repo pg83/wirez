@@ -83,15 +83,7 @@ go_vet = command(
     color="green",
 )
 
-# The test binary doubles as wirez itself (see TestMain in integration_test.go)
-# and needs /dev/net/tun plus unprivileged user namespaces for the container
-# test; it skips that test where they are missing, unless
-# WIREZ_TEST_CONTAINER_REQUIRED is set (CI does), which turns the skip into a
-# failure. The variable is part of the node so that flipping it reruns the test.
-go_test_env = {
-    **GO_ENV,
-    "WIREZ_TEST_CONTAINER_REQUIRED": os.environ.get("WIREZ_TEST_CONTAINER_REQUIRED", ""),
-}
+go_test_env = dict(GO_ENV)
 go_test_cmd = ["go", "test", "-count=1", "-timeout=10m"]
 
 if build.flags.race:
@@ -113,5 +105,36 @@ go_test = command(
     color="green",
 )
 
+# Integration tests: one node per tst/test_*.py, each driving the real binary
+# around fake proxies and servers on loopback (see tst/lib.py). They need
+# /dev/net/tun and unprivileged user namespaces and skip where those are
+# missing, unless WIREZ_TEST_CONTAINER_REQUIRED is set (CI does), which turns
+# the skip into a failure. The variable is part of the node so that flipping
+# it reruns the tests.
+INTEGRATION_LIB = ["$(S)/tst/lib.py", "$(S)/tst/dnswire.py", "$(S)/tst/client.py"]
+
+integration_tests = []
+for test_path in build.glob("$(S)/tst/test_*.py"):
+    test_name = test_path.rsplit("/", 1)[-1][len("test_"):-len(".py")]
+    test_stamp = f"$(B)/tests/it_{test_name}.stamp"
+    integration_tests.append(command(
+        name=f"it_{test_name}",
+        inputs=[test_path, *INTEGRATION_LIB],
+        outputs=[test_stamp],
+        deps=[wirez],
+        cmd=[
+            ["python3", test_path],
+            touch(test_stamp),
+        ],
+        cwd="$(S)",
+        env={
+            "WIREZ_TEST_BINARY": wirez.outputs[0],
+            "WIREZ_TEST_CONTAINER_REQUIRED": os.environ.get("WIREZ_TEST_CONTAINER_REQUIRED", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        descr="IT",
+        color="green",
+    ))
+
 group("install", wirez)
-group("test", gofmt_check, go_vet, go_test)
+group("test", gofmt_check, go_vet, go_test, *integration_tests)

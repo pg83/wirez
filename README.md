@@ -14,11 +14,11 @@ wirez is built with the monorepo's `build` runner (a copy lives next to `build.p
 
 ```
 ./build          # builds .build/bin/wirez and publishes the ./wirez symlink
-./build test     # gofmt, go vet and the test suite
+./build test     # gofmt, go vet, the Go unit tests and the integration tests
 ./build -Drace test
 ```
 
-The container test needs `/dev/net/tun` and unprivileged user namespaces; it is skipped where they are missing.
+The integration tests live in `tst/test_*.py`, one build node each (`./build it_dns`, ...). Every one of them runs the real binary around fake proxies, DNS and echo servers on loopback, with `tst/client.py` generating traffic inside the container. They need `/dev/net/tun` and unprivileged user namespaces and are skipped where those are missing; set `WIREZ_TEST_CONTAINER_REQUIRED=1` (CI does) to make that a failure instead.
 
 ## Usage
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -70,7 +71,7 @@ func runContainer(args []string) {
 	// wait for starting network stack
 	childConn.ReceiveACK()
 
-	setupIPNetwork(*ipv6)
+	setupIPNetwork(*ipv6, *gid)
 
 	makeMountsPrivate()
 	bindMountFile("/etc/resolv.conf", resolvConfContent(*dns, readHostFile("/etc/resolv.conf")))
@@ -171,8 +172,9 @@ func createResolverSockets() (udpFd, tcpFd int) {
 	return udpFd, tcpFd
 }
 
-func setupIPNetwork(ipv6 bool) {
+func setupIPNetwork(ipv6 bool, gid int) {
 	setupLoopback()
+	allowPing(gid)
 
 	tun0, tunAddr := setupIPAddress(tunDevice, tunNetworkAddr)
 
@@ -195,6 +197,14 @@ func setupIPNetwork(ipv6 bool) {
 		Dst:       &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
 		LinkIndex: tun0.Attrs().Index,
 	}))
+}
+
+// allowPing lets the application open ICMP echo sockets without CAP_NET_RAW;
+// wirez answers the echoes itself. The range is spelled in the gid space of
+// the user namespace owning the netns, where only the container gid exists.
+// Best effort: without it only ping is missing.
+func allowPing(gid int) {
+	_ = os.WriteFile("/proc/sys/net/ipv4/ping_group_range", []byte(fmt.Sprintf("%d %d\n", gid, gid)), 0644)
 }
 
 // makeMountsPrivate stops the bind mounts made by bindMountFile from
