@@ -35,7 +35,7 @@ class StaticBinaryTest(lib.WorkloadTest):
             problem = f"{busybox} is dynamically linked"
             if lib.REQUIRED:
                 self.fail(problem)
-            self.skipTest(problem)
+            lib.skip(problem)
         (self.dir / "index.html").write_text("fetched by a static binary\n")
         port = lib.free_port()
         self.daemon([sys.executable, lib.HTTPD, lib.WORKLOAD_IPV4, port, self.dir])

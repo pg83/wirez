@@ -54,7 +54,17 @@ class ContainerTest(unittest.TestCase):
             return
         if REQUIRED:
             raise AssertionError(problem)
-        raise unittest.SkipTest(problem)
+        skip(problem)
+
+
+def skip(reason):
+    """Skips the test, or the whole class from setUpClass, and leaves a marker
+    in the coverage directory: a node that skipped everything writes no
+    counters, and dev/coverage.py must not take that for lost data."""
+    coverage_dir = os.environ.get("GOCOVERDIR")
+    if coverage_dir:
+        Path(coverage_dir, "skipped").touch()
+    raise unittest.SkipTest(reason)
 
 
 def wirez(*args, timeout=TIMEOUT, check=True):
@@ -684,7 +694,7 @@ def require_tools(test, *names):
     problem = "missing tools: " + " ".join(missing)
     if REQUIRED:
         raise AssertionError(problem)
-    test.skipTest(problem)
+    skip(problem)
 
 
 def wait_port(host, port, timeout=15, daemon=None):
@@ -869,7 +879,7 @@ class SshServer:
 
     def __init__(self, test, directory, extra_env=None):
         if os.geteuid() == 0:
-            test.skipTest("sshd run as root needs the privilege separation user and directory")
+            skip("sshd run as root needs the privilege separation user and directory")
         require_tools(test, "ssh", "sshd", "ssh-keygen")
         self.dir = Path(directory)
         self.env = wirez_env({**(extra_env or {}), **nss_env(self.dir)})
