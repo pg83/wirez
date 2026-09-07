@@ -38,3 +38,15 @@ Throw(netlink.AddrAdd(dev, addr))
 
 return dev, addr
 ```
+
+## Build and test
+
+Use the monorepo `build` runner, never `go build`/`go test` directly:
+
+```
+./build              # .build/bin/wirez, published as ./wirez
+./build test         # gofmt, go vet, go test
+./build -Drace test  # same under the race detector
+```
+
+Go dependencies are not vendored; `go.mod`/`go.sum` pin them and the module cache supplies them. CI (`.github/workflows/ci.yml`) calls `./build` too.

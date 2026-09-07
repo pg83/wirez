@@ -1,2 +1,8 @@
-wirez
+# build runner output
+/.build/
+/.build-*/
+# symlinks ./build publishes for explicit targets
+/wirez
+
 proxies.txt
+__pycache__/
