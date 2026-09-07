@@ -772,3 +772,71 @@ class WorkloadTest(ContainerTest):
 
     def daemon(self, argv, **kwargs):
         return Daemon(self, argv, **kwargs)
+
+
+class SshServer:
+    """An OpenSSH server for tests: fresh host and user keys, public key
+    authentication only, listening on the workload address. Runs as the test
+    user with nss_wrapper where nix's libc cannot see that user."""
+
+    def __init__(self, test, directory, extra_env=None):
+        lib_require = require_tools(test, "ssh", "sshd", "ssh-keygen")
+        self.dir = Path(directory)
+        self.env = wirez_env({**(extra_env or {}), **nss_env(self.dir)})
+        for name in ("host_key", "user_key"):
+            run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", self.dir / name], env=self.env)
+        authorized = self.dir / "authorized_keys"
+        authorized.write_text((self.dir / "user_key.pub").read_text())
+        self.port = free_port()
+        (self.dir / "sshd_config").write_text(
+            f"Port {self.port}\nListenAddress {WORKLOAD_IPV4}\nHostKey {self.dir}/host_key\n"
+            "PidFile none\nUsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n"
+            f"PubkeyAuthentication yes\nAuthorizedKeysFile {authorized}\nStrictModes no\n"
+            "Subsystem sftp internal-sftp\nLogLevel ERROR\n"
+        )
+        self.daemon = Daemon(test, [shutil.which("sshd"), "-D", "-e", "-f", self.dir / "sshd_config"], env=self.env)
+        wait_port(WORKLOAD_IPV4, self.port, daemon=self.daemon)
+        self.target = f"{user_name()}@{WORKLOAD_IPV4}"
+        self.options = [
+            "-i", str(self.dir / "user_key"), "-F", "/dev/null",
+            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
+        ]
+
+    @property
+    def ssh_args(self):
+        return ["-p", str(self.port), *self.options]
+
+    @property
+    def scp_args(self):
+        return ["-P", str(self.port), *self.options]
+
+    @property
+    def ssh_command(self):
+        """The ssh invocation as one string, for GIT_SSH_COMMAND and rsync -e."""
+        import shlex
+        return shlex.join(["ssh", *self.ssh_args])
+
+
+class TlsMaterial:
+    """A private CA with a server certificate for the workload address and a
+    client certificate, made with openssl."""
+
+    def __init__(self, directory):
+        self.dir = Path(directory)
+        self.ca = self.dir / "ca.pem"
+        self.ca_key = self.dir / "ca.key"
+        run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+             "-keyout", self.ca_key, "-out", self.ca, "-subj", "/CN=wirez test CA", "-days", "2"])
+        self.server_cert, self.server_key = self.issue("server", f"subjectAltName=IP:{WORKLOAD_IPV4}")
+        self.client_cert, self.client_key = self.issue("client", "extendedKeyUsage=clientAuth")
+
+    def issue(self, name, extension):
+        key = self.dir / f"{name}.key"
+        csr = self.dir / f"{name}.csr"
+        cert = self.dir / f"{name}.pem"
+        run(["openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+             "-keyout", key, "-out", csr, "-subj", f"/CN={name}", "-addext", extension])
+        run(["openssl", "x509", "-req", "-in", csr, "-CA", self.ca, "-CAkey", self.ca_key, "-CAcreateserial",
+             "-out", cert, "-days", "2", "-copy_extensions", "copy"])
+        return cert, key

@@ -36,7 +36,8 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               go
-              python3
+              # hypercorn serves the HTTP/2 streaming test application
+              (python3.withPackages (ps: [ ps.hypercorn ]))
 
               iproute2
               util-linux
@@ -45,9 +46,13 @@
               caddy
               nghttp2
               openssh
+              rsync
               git
               iperf3
               dig
+              websocat
+              socat
+              openssl
               pkgsStatic.busybox
               microsocks
               _3proxy
